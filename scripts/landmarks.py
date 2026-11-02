@@ -461,6 +461,34 @@ def roof_override(f, pal):
     return _style(pal, o["roof"]) if o and "roof" in o else None
 
 
+def palm_tree(vol, g, r, c, h, leaves, trunk, height=None):
+    """Royal / coconut palm: slender 1-voxel trunk up to the crownshaft and 6–8 arching fronds."""
+    H = int(height or 11 + h % 5)
+    z0 = int(g[r, c])
+    top = min(z0 + H, vol.shape[0] - 2)
+    if top <= z0 + 4:
+        return
+    vol[z0:top - 1, r, c] = trunk
+    leaf = leaves[(h >> 7) % 5]
+    leaf2 = leaves[5 + (h >> 11) % 5]
+    angles = [k * math.pi / 4 + ((h >> (k * 3)) & 3) * 0.12 for k in range(8)]
+    span = min(4, max(3, H // 3))
+    for i, a in enumerate(angles):
+        ca, sa = math.cos(a), math.sin(a)
+        for s in range(1, span + 1):
+            rr = r + int(round(sa * s))
+            cc = c + int(round(ca * s))
+            dz = 1 if s == 1 else (0 if s == 2 else -(s - 2))
+            zz = top - 1 + dz
+            if 0 <= rr < vol.shape[1] and 0 <= cc < vol.shape[2] and 0 <= zz < vol.shape[0] and vol[zz, rr, cc] == 0:
+                vol[zz, rr, cc] = leaf if (i + s) % 2 == 0 else leaf2
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if abs(dr) + abs(dc) <= 1 and 0 <= r + dr < vol.shape[1] and 0 <= c + dc < vol.shape[2]:
+                if vol[top, r + dr, c + dc] == 0:
+                    vol[top, r + dr, c + dc] = leaf
+
+
 def small_tree(vol, g, r, c, h, leaves, trunk, height=None):
     """A young street tree as planted 2025-26 (Plac Centralny, Złota): photos show a clear trunk to ~4 m and a
     narrow, airy crown on top (visual_ref.md, Złota 2026 photos)."""
@@ -651,9 +679,12 @@ def make_views(found, osm, g, top_at, note, bmask, vol=None, leaf_ids=()):
 
     views = {}
     if "Pałac Kultury i Nauki" not in found:
-        from aoi import D, W
-        cx, cz = W / 2, D / 2
-        return {"overview": dict(label="Brickell", target=[cx, 40, cz], pos=[cx - 600, 900, cz + 1400])}
+        from aoi import I0, J0
+        return {
+            "overview": dict(label="Brickell & Biscayne Bay", target=[I0, 45, J0 - 150], pos=[I0 + 750, 520, J0 + 550]),
+            "downtown": dict(label="Downtown & Metromover", target=[I0 - 80, 25, J0 - 780], pos=[I0 + 320, 210, J0 - 420]),
+            "panorama": dict(label="Panorama Tower", target=[I0, 95, J0], pos=[I0 + 450, 190, J0 + 220]),
+        }
     pk = at("Pałac Kultury i Nauki")
     views["overview"] = dict(label="Overview", target=[pk[0], 20, pk[2]], pos=add([pk[0], 20, pk[2]], (-420, 860, 1180)))
     views["pkin"] = dict(label="Palace", target=[pk[0], 110, pk[2]], pos=add([pk[0], 110, pk[2]], (420, 160, 300)))

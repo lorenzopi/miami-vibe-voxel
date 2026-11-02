@@ -27,8 +27,9 @@ export class Hud {
   rects: Rect[] = [];
   private readonly box = el('div', '');
   private readonly touch = coarsePointer();
+  private drag: 'move' | 'turn' = 'move';
 
-  constructor(dom: HTMLElement, mode: Mode) {
+  constructor(dom: HTMLElement, mode: Mode, private readonly onPick?: (action: 'move' | 'turn') => void) {
     const box = this.box;
     box.id = 'hud';
     box.innerHTML = `<div class="who"></div>${this.touch ? ''
@@ -37,7 +38,7 @@ export class Hud {
     addEventListener('keydown', (e) => { if (!(e.target as Element).closest?.('input:not([type=range])')) lit(ALIAS[e.code] ?? e.code, true); });
     addEventListener('keyup', (e) => lit(ALIAS[e.code] ?? e.code, false));
     addEventListener('blur', () => box.querySelectorAll('.on').forEach((n) => n.classList.remove('on')));
-    dom.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') lit(e.button === 2 || e.shiftKey ? 'r' : 'l', true); });
+    dom.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') lit(e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey ? 'r' : 'l', true); });
     addEventListener('pointerup', () => { lit('l', false); lit('r', false); });
     let wheelT = 0;
     dom.addEventListener('wheel', () => { lit('w', true); clearTimeout(wheelT); wheelT = setTimeout(() => lit('w', false), 250); }, { passive: true });
@@ -52,6 +53,17 @@ export class Hud {
     if (this.touch) return;
     const items = [...MOUSE[mode]];
     if (mode === 'walk' || ride?.kind === 'person') items.splice(items.length - 1, 0, ['Space', SPACE, 'jump']);
-    $('.mouse', this.box).innerHTML = items.map(([k, icon, word]) => `<figure data-k="${k}">${icon}<figcaption>${word}</figcaption></figure>`).join('');
+    const mouse = $('.mouse', this.box);
+    mouse.innerHTML = items.map(([k, icon, word]) => `<figure data-k="${k}" data-act="${word}">${icon}<figcaption>${word}</figcaption></figure>`).join('');
+    mouse.querySelectorAll('figure').forEach((fig) => {
+      const act = fig.getAttribute('data-act');
+      if (act !== 'move' && act !== 'turn') return;
+      fig.classList.toggle('on', act === this.drag);
+      fig.addEventListener('click', () => {
+        this.drag = act;
+        mouse.querySelectorAll('figure').forEach((n) => n.classList.toggle('on', n.getAttribute('data-act') === this.drag));
+        this.onPick?.(act);
+      });
+    });
   }
 }

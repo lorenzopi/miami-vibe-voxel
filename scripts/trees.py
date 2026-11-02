@@ -87,11 +87,17 @@ def load(osm_trees):
 
 
 CONIFER = ("Pinus", "Picea", "Abies", "Taxus", "Thuja", "Larix", "Pseudotsuga", "Juniperus", "Chamaecyparis", "Metasequoia")
+PALM = ("Cocos", "Roystonea", "Sabal", "Washingtonia", "Phoenix", "Adonidia", "Ptychosperma", "Syagrus", "Bismarckia", "Thrinax", "Acoelorrhaphe", "Caryota")
 
 
 def is_conifer(t):
     sp = t.get("species") or ""
     return sp.startswith(CONIFER) or t.get("leaf_type") == "needleleaved"
+
+
+def is_palm(t):
+    sp = t.get("species") or ""
+    return sp.startswith(PALM) or t.get("leaf_type") == "palm" or "palm" in sp.lower()
 
 
 def _rings(flat_rings):

@@ -22,7 +22,7 @@ from shapely.geometry import LineString, Point
 from shapely.ops import substring
 from shapely.strtree import STRtree
 
-from aoi import CX, CY, D, THETA, W
+from aoi import CITY, CX, CY, D, THETA, W
 from osm import OSM
 import landmarks
 
@@ -117,7 +117,7 @@ C = {  # ground & misc palette (MagicaVoxel-like pastel)
     "scrub": pal("#5f8f45", M_LEAF), "flower": pal("#d98fb3", M_GRASS), "flower2": pal("#e8c25e", M_GRASS),
     "dirt": pal("#a58a66"), "dirt2": pal("#8e7455"), "fresh": pal("#93865a", M_GRASS),
     "ballast": pal("#8a8178"), "rail": pal("#55575d", M_METAL), "trambed": pal("#a9a59c"),
-    "platform": pal("#b7b1a6"), "water": pal("#68654f", M_WATER), "mark": pal("#f1efe8", M_MARK),
+    "platform": pal("#b7b1a6"), "water": pal("#2a90b0" if CITY == "miami" else "#68654f", M_WATER), "mark": pal("#f1efe8", M_MARK),
     "bare": pal("#a8977c", M_SOIL),  # lawns before their grass arrives (tiles.py: grass is its own file)
     "soil": pal("#7a5c45", M_SOIL), "trunk": pal("#6b4f3a"), "lamp": pal("#ffe2a8", M_LAMP),
     "pole": pal("#3a3e42", M_METAL), "steps": pal("#a8a296"), "hatch": pal("#d9c860", M_MARK),
@@ -200,6 +200,51 @@ def cells_of(geom, all_touched=False):
     if len(rr) == 0 and not all_touched:
         return cells_of(geom, True)
     return rr + r0, cc + c0
+
+
+def miami_bay(osm):
+    """Biscayne Bay from the OSM coastline.
+
+    Coastline ways keep land on the left in the real world. This grid's rows
+    grow south, so that side is shapely's right and the water is on shapely's left.
+    Islands (Hibiscus, Palm, the port) are closed coastline rings and stay land.
+    """
+    from shapely.geometry import box
+    from shapely.ops import polygonize, unary_union
+
+    lines = [line for _, _, line in osm.lines_with("natural", ("coastline",))]
+    for _, _, t, geom in osm.areas:
+        if t.get("natural") != "coastline":
+            continue
+        parts = [geom] if geom.geom_type == "Polygon" else list(geom.geoms)
+        for g in parts:
+            lines.append(LineString(g.exterior.coords))
+    if not lines:
+        return None
+    frame = box(0, 0, W, D)
+    polys = list(polygonize(unary_union(lines + [box(-1, -1, W + 1, D + 1).boundary])))
+    tree = STRtree(polys)
+    wet = set()
+    for line in lines:
+        coords = list(line.coords)
+        n = len(coords) - 1
+        for k in range(0, n, max(1, n // 6)):
+            a, b = coords[k], coords[k + 1]
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            length = (dx * dx + dy * dy) ** 0.5
+            if length < 0.5:
+                continue
+            p = Point((a[0] + b[0]) / 2 - dy / length * 6, (a[1] + b[1]) / 2 + dx / length * 6)
+            if not frame.contains(p):
+                continue
+            for i in tree.query(p):
+                if polys[int(i)].covers(p):
+                    wet.add(int(i))
+    geoms = [g for i in wet if not (g := polys[i].intersection(frame)).is_empty]
+    if not geoms:
+        return None
+    return rasterio.features.rasterize([(g, 1) for g in geoms], out_shape=(D, W),
+                                        transform=Affine.identity(), fill=0, dtype=np.uint8) > 0
 
 
 def burn(target, shapes, all_touched=False):
@@ -325,26 +370,38 @@ area_hw.sort(key=lambda s: -s[0].area)
 burn(gcol, area_hw)
 is_road = road_mask > 0
 
-# rails & trams (only open-air)
+# rails, trams, Metromover (monorail) & Metrorail (elevated subway)
 rail_beds, rails = [], []
+guideway_lines = []
 for oid, t, line in osm.lines_with("railway"):
-    if tunnelish(t) or t["railway"] not in ("rail", "tram", "light_rail", "subway"):
+    rk = t["railway"]
+    if tunnelish(t) or rk not in ("rail", "tram", "light_rail", "subway", "monorail"):
         continue
-    if t["railway"] == "subway":
+    elevated = on_bridge(t) or rk == "monorail" or (parse_len(t.get("layer")) or 0) >= 1
+    if rk == "subway" and not elevated:
         continue
-    tram = t["railway"] == "tram"
-    if on_bridge(t):
-        bridge_shapes.append((line.buffer(1.4 if tram else 1.9, cap_style="flat"), C["trambed" if tram else "ballast"], int(parse_len(t.get("layer")) or 1)))
-        bridge_lines.append((line, 1.4 if tram else 1.9, int(parse_len(t.get("layer")) or 1), C["trambed" if tram else "ballast"]))
+    tram = rk in ("tram", "monorail")
+    hw = 2.2 if rk == "monorail" else (1.4 if rk == "tram" else 2.6 if rk == "subway" else 1.9)
+    if elevated:
+        lay = max(1, int(parse_len(t.get("layer")) or 1))
+        col_ = C["deck"] if rk == "monorail" else C["trambed" if tram else "ballast"]
+        bridge_shapes.append((line.buffer(hw, cap_style="flat"), col_, lay))
+        bridge_lines.append((line, hw, lay, col_))
+        if rk in ("monorail", "subway"):
+            guideway_lines.append((line, lay))
         continue
-    rail_beds.append((line.buffer(1.4 if tram else 1.9, cap_style="flat"), C["trambed" if tram else "ballast"]))
+    rail_beds.append((line.buffer(hw, cap_style="flat"), C["trambed" if tram else "ballast"]))
     for off in (-0.72, 0.72):
         try:
             rails.append((line.offset_curve(off), C["rail"]))
         except Exception:
             pass
 for oid, typ, t, geom in osm.areas_with("railway", ("platform",)):
-    if not tunnelish(t):
+    if tunnelish(t):
+        continue
+    if on_bridge(t) or (parse_len(t.get("layer")) or 0) >= 1:
+        bridge_shapes.append((geom, C["platform"], max(1, int(parse_len(t.get("layer")) or 1))))
+    else:
         rail_beds.append((geom, C["platform"]))
 burn(gcol, rail_beds)
 burn(gcol, rails, all_touched=True)
@@ -357,6 +414,30 @@ water = [(geom, C["granite_d"] if t.get("fountain") == "splash_pad" else C["wood
           else C["water"]) for oid, typ, t, geom in osm.areas
          if (t.get("amenity") == "fountain" or t.get("natural") == "water" or t.get("water")) and not tunnelish(t)]
 burn(gcol, water)
+# The bay is natural=bay / coastline, not natural=water, so the test above never saw it.
+# Class 9 lidar is only the dredged channel. The open bay comes back as ground,
+# the ortho reads that beige as grass, and November drops leaf litter on it.
+if CITY == "miami" and "water" in z.files:
+    gcol[z["water"].astype(bool)] = C["water"]
+if CITY == "miami":
+    bay = miami_bay(osm)
+    if bay is not None:
+        keep = is_road.copy()
+        pier_shapes = [(line.buffer((parse_len(t.get("width")) or 5) / 2, cap_style="flat"), 1)
+                       for _, t, line in osm.lines_with("man_made", ("pier",))]
+        pier_shapes += [(geom, 1) for _, _, _, geom in osm.areas_with("man_made", ("pier",))]
+        if pier_shapes:
+            pier = np.zeros((D, W), np.uint8)
+            burn(pier, pier_shapes)
+            keep |= pier > 0
+        footprints = [(geom, 1) for _, _, t, geom in osm.areas
+                      if t.get("building") not in (None, "no") or "building:part" in t]
+        if footprints:
+            fp = np.zeros((D, W), np.uint8)
+            burn(fp, footprints)
+            keep |= fp > 0
+        gcol[bay & ~keep] = C["water"]
+        note("bay from coastline:", int((bay & ~keep).sum()))
 # the Vistula (and ponds): one flat surface per water body -- the DTM over water steps in 1 m terraces that show as
 # lines across the river; it drops ~0.3 m across the map, so a single level is truthful
 wlab, wn = ndimage.label(gcol == C["water"])
@@ -433,11 +514,14 @@ gcol[lm_mask] = C["mark"]
 note("lane marking cells:", int(lm_mask.sum()))
 
 # ---------------------------------------------------------------- buildings
+UNBUILT_MIAMI = {1552890381, 6034905790}  # 1201 Brickell Bay Dr (Citadel HQ) is under construction, not in the lidar
 feats = []
 for oid, typ, t, geom in osm.areas:
     part = t.get("building:part") not in (None, "no")
     bld = t.get("building") not in (None, "no") and not part
-    if not (part or bld) or t.get("building") == "construction" or t.get("location") == "underground":
+    if not (part or bld) or t.get("building") in ("construction", "proposed") or "construction" in t or t.get("location") == "underground":
+        continue
+    if CITY == "miami" and (oid in UNBUILT_MIAMI or "citadel hq" in (t.get("name") or "").lower()):
         continue
     if parse_len(t.get("layer", 0)) < 0 and not part:
         continue
@@ -520,7 +604,7 @@ for f in render:
             roof_ = (f["maxh"] - rh) + rh * (dep - 1) / max(dep.max() - 1, 1)
             top[rr_, cc_] = np.maximum(top[rr_, cc_], roof_)
             src_osm.append((f["id"], tag(f, "name"), round(p90, 1), f["maxh"], "pointed roof"))
-        elif small or p90 < 0.35 * f["maxh"]:  # else: nothing tall there in 2025 -> built after the flight
+        elif small or (CITY != "miami" and p90 < 0.35 * f["maxh"]):  # on Miami, never invent unbuilt towers missing from lidar
             # spire/needle under-sampled by LiDAR, or built after the 2025 flight
             top[f["rr"], f["cc"]] = np.maximum(top[f["rr"], f["cc"]], f["maxh"])
             src_osm.append((f["id"], tag(f, "name"), round(p90, 1), f["maxh"], "spire" if small else "new"))
@@ -920,7 +1004,7 @@ near_tree = np.zeros((D, W), bool)
 if len(tree_rc):
     near_tree[tree_rc[:, 0], tree_rc[:, 1]] = True
     near_tree = ndimage.binary_dilation(near_tree, iterations=3)
-veg = (~bmask) & (nd_mean > 2.2) & ((exg > 0.025) | (near_tree & (exg > -0.03)))
+veg = (~bmask) & (gcol != C["water"]) & (nd_mean > 2.2) & ((exg > 0.025) | (near_tree & (exg > -0.03)))
 # nor inside any building's outline: one drawn only through its parts (Salvator church) left the cells between its
 # parts out of bmask, and its green copper roof grew 1 800 leaf voxels, pillars up its front
 _allb = np.zeros((D, W), bool)
@@ -991,11 +1075,13 @@ trunks = []  # (row, col, thick): drawn once the crowns are shaped around them
 
 
 trunk_conifer = []  # per trunk: a conifer by the database's species (or OSM leaf_type)
+trunk_palm = []     # per trunk: a palm (OSM leaf_type=palm or narrow tall Miami crown)
 
 
-def put_trunk(r, c, thick=False, conifer=False):
+def put_trunk(r, c, thick=False, conifer=False, palm=False):
     trunks.append((r, c, thick))
     trunk_conifer.append(conifer)
+    trunk_palm.append(palm)
     trunk_at[r, c] = True
 
 
@@ -1004,13 +1090,23 @@ for t in all_trees:
     if not (2 <= c < W - 2 and 2 <= r < D - 2) or bmask[r, c]:
         t["drawn"] = "none"
         continue
+    palm = treedb.is_palm(t) or (CITY == "miami" and not treedb.is_conifer(t) and t.get("leaf_type") != "broadleaved")
+    if palm and CITY == "miami":
+        # Draw tagged palms explicitly with a tall slender trunk and arching fronds so they read as palms, not domes.
+        hgt = t.get("height") or (int(crown_top[r, c]) if veg[r, c] and crown_top[r, c] >= 7 else None)
+        landmarks.palm_tree(vol, g, r, c, stable_hash(t["id"]), LEAVES, C["trunk"], height=hgt)
+        trunk_at[r, c] = True
+        t["drawn"] = "palm"
+        t["z"] = int(g[r, c])
+        n_trunk += 1
+        continue
     if canopy_near[r, c]:
         if not veg[r, c] and _vd[r, c] <= 2.5:  # the point just off its crown's LiDAR cells: under the nearest one
             r, c = int(_vr[r, c]), int(_vc[r, c])
         if veg[r, c] and not trunk_ok_db[r, c] and _dbd[r, c] <= 3:  # mapped onto the road edge: to the kerb side
             r, c = int(_dbr[r, c]), int(_dbc[r, c])
         if veg[r, c]:
-            put_trunk(r, c, thick=(t.get("trunk_cm") or 0) >= 250, conifer=treedb.is_conifer(t))
+            put_trunk(r, c, thick=(t.get("trunk_cm") or 0) >= 250, conifer=treedb.is_conifer(t), palm=palm)
             t["drawn"] = "lidar"
             t["z"] = int(g[r, c])
             t["h"] = int(crown_top[r, c])
@@ -1065,6 +1161,13 @@ if trunks:
     k_ = own[vr_, vc_] - 1
     ok_ = k_ >= 0
     dep = 0.62 * Ht[k_] * np.sqrt(np.clip(1 - (_dt[vr_, vc_] / Rt[k_]) ** 2, 0, 1))
+    if CITY == "miami":
+        # Compact tall crowns in Miami lidar (H >= 8 m, radius <= 4.5 m) are palms: shallow 2–3 m frond tuft at the top
+        # so the trunk stays exposed underneath instead of filling in a heavy deciduous ball.
+        palm_k = np.array(trunk_palm, bool) | ((Ht >= 8) & (Rt <= 4.6))
+        is_p = np.zeros(len(vr_), bool)
+        is_p[ok_] = palm_k[k_[ok_]]
+        dep = np.where(is_p, np.minimum(dep, 2.5), dep)
     bot = np.round(crown_top[vr_, vc_] - np.maximum(dep, 1)).astype(np.int32)
     bot = np.clip(bot, 2, crown_top[vr_, vc_] - 1)
     crown_bot[vr_[ok_], vc_[ok_]] = bot[ok_]
@@ -1375,10 +1478,30 @@ for _z in range(int(g.min()), int(zt_.max()) + 6):
     vol[_z, _rw[_m], _cw[_m]] = np.where((_under & _wet[_m]) | _leafy[_v], 0, _v)  # (a crown poking through the deck too)
 rr, cc = np.nonzero(deck)
 if len(rr):
-    zt_ = zt_[rr, cc]
+    zt_d = zt_[rr, cc]
     for dz in (1, 2):
-        vol[zt_ - dz, rr, cc] = C["deck"]
-    vol[zt_ - 1, rr, cc] = deck_col[rr, cc]
+        vol[zt_d - dz, rr, cc] = C["deck"]
+    vol[zt_d - 1, rr, cc] = deck_col[rr, cc]
+    # Elevated Metromover / Metrorail guideway piers every ~28 m down to the ground
+    pier_pts = []
+    for line, _lay in guideway_lines:
+        if line.length < 18:
+            continue
+        for dist in np.arange(12.0, line.length - 6.0, 28.0):
+            p = line.interpolate(dist)
+            c, r = int(p.x), int(p.y)
+            if not (1 <= c < W - 1 and 1 <= r < D - 1) or not deck[r, c] or bmask[r, c]:
+                continue
+            if pier_pts and min((c - px) ** 2 + (r - py) ** 2 for px, py in pier_pts) < 18 ** 2:
+                continue
+            z0, z1 = int(g[r, c]), int(g[r, c] + round(float(deck_h[r, c]))) - 2
+            if z1 <= z0 + 2:
+                continue
+            pier_pts.append((c, r))
+            for dr in (0, 1):
+                for dc in (0, 1):
+                    if not bmask[r + dr, c + dc]:
+                        vol[z0:z1, r + dr, c + dc] = C["deck"]
 note("bridge deck cells:", int(deck.sum()))
 # bridge pylons (Most Świętokrzyski's ~90 m mast): compact LiDAR blobs far above the deck inside a bridge
 pyl = (bridge_area > 0) & (nd_max > np.where(deck_h > 0, deck_h, nd_mean) + 45) & ~bmask  # the stays fan out low; only the mast stands this high
@@ -1605,9 +1728,10 @@ tile_info = tiles.export(vol, g, OUT / "tiles", note, **EXPORT_IDS)
 if os.environ.get("LMCACHE"):
     pickle.dump(dict(EXPORT_IDS, debris_keep=[i for i, e in enumerate(pal.entries) if e[3] == M_LEAF] + [C["trunk"]]),
                 open("data/cache/export_ids.pkl", "wb"))
-# tram routes for the animated trams: merged open-air tram tracks, sampled every metre with ground z
+# tram / Metromover routes for the animated cars: merged open-air tracks, sampled every 2 m with deck or ground z
 from shapely.ops import linemerge
-tram_lines = linemerge([l for oid, t, l in osm.lines_with("railway", ("tram",)) if not tunnelish(t)])
+tram_kinds = ("tram", "monorail", "subway") if CITY == "miami" else ("tram",)
+tram_lines = linemerge([l for oid, t, l in osm.lines_with("railway", tram_kinds) if not tunnelish(t)])
 tram_lines = list(getattr(tram_lines, "geoms", [tram_lines]))
 trams = []
 for ln in sorted(tram_lines, key=lambda l: -l.length):
@@ -1617,7 +1741,8 @@ for ln in sorted(tram_lines, key=lambda l: -l.length):
     path = []
     for p in pts:
         c, r = min(max(int(p.x), 0), W - 1), min(max(int(p.y), 0), D - 1)
-        path.append([round(p.x, 1), round(p.y, 1), int(g[r, c])])
+        dh = int(round(float(deck_h[r, c]))) if deck[r, c] else 0
+        path.append([round(p.x, 1), round(p.y, 1), int(g[r, c]) + dh])
     trams.append(path)
 note("tram paths:", len(trams), "total km", round(sum(len(p) for p in trams) * 2 / 1000, 2))
 from aoi import CITY

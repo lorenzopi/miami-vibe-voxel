@@ -81,10 +81,10 @@ for name, lines in streets.items():
         best[(name, "street")] = [name, "street", round(mid.x, 1), round(mid.y, 1), round(u.length), ""]
 
 for _, _, t, poly in osm.areas:
-    if t.get("name"):
+    if t.get("name") and "citadel hq" not in t["name"].lower() and t.get("building") not in ("construction", "proposed") and "construction" not in t:
         add(t["name"], kind_of(t), poly, english(t))
 for _, t, pt in osm.nodes:
-    if t.get("name"):
+    if t.get("name") and "citadel hq" not in t["name"].lower() and "construction" not in t:
         add(t["name"], kind_of(t), pt, english(t))
 
 # the Finnish houses of Osiedle Jazdów (1945, ~27 left; Otwarty Jazdów: NGOs, culture and grassroots groups): every

@@ -12,6 +12,7 @@ Source: Miami-Dade ITD lidar, flown 7-9 April 2021, redistributed by NOAA
 Office for Coastal Management. Public domain.
 https://www.fisheries.noaa.gov/inport/item/76028
 """
+import io
 import json
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import laspy
 import numpy as np
+from PIL import Image
 from scipy import ndimage
 
 from aoi import D, RAW, W, to_grid, world_bounds
@@ -37,7 +39,7 @@ CLASS_RGB = {
     5: (46, 120, 64),    # high vegetation
     4: (78, 150, 78),    # medium vegetation
     3: (140, 168, 96),   # low vegetation
-    9: (48, 164, 168),   # water
+    9: (36, 110, 168),   # bay: more blue than green, so it is not read as grass
     2: (196, 186, 164),  # ground
 }
 PRIO = {6: 70, 17: 60, 5: 50, 4: 40, 3: 30, 9: 20, 2: 10}
@@ -60,6 +62,33 @@ def node_bounds(depth, x, y, z):
 
 def intersects(bounds, box):
     return not (bounds[3] < box[0] or bounds[0] > box[2] or bounds[4] < box[1] or bounds[1] > box[3])
+
+
+def fetch_naip_ortho():
+    """Fetch 1 m USGS NAIP aerial orthophoto over the AOI in EPSG:6346 (cached in data/raw/naip_1m.png)."""
+    cache = Path(RAW) / "naip_1m.png"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    if cache.exists():
+        im = Image.open(cache).convert("RGB")
+        if im.size == (W, D):
+            return np.asarray(im, dtype=np.uint8)
+    x0, y0, x1, y1 = world_bounds()
+    xm = (x0 + x1) / 2
+    w0 = W // 2
+    w1 = W - w0
+    base = "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer/exportImage"
+    halves = []
+    for xa, xb, wi in ((x0, xm, w0), (xm, x1, w1)):
+        url = f"{base}?bbox={xa},{y0},{xb},{y1}&bboxSR=6346&imageSR=6346&size={wi},{D}&format=jpg&f=image"
+        req = urllib.request.Request(url, headers=UA)
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            im = Image.open(io.BytesIO(resp.read())).convert("RGB")
+        if im.size != (wi, D):
+            im = im.resize((wi, D), Image.Resampling.BILINEAR)
+        halves.append(np.asarray(im, dtype=np.uint8))
+    arr = np.concatenate(halves, axis=1)
+    Image.fromarray(arr).save(cache)
+    return arr
 
 
 def select_nodes():
@@ -112,6 +141,8 @@ def main():
     dsm = np.full((D * 2, W * 2), -np.inf, np.float32)
     gsum = np.zeros((D, W), np.float64)
     gcnt = np.zeros((D, W), np.uint16)
+    wsum = np.zeros((D, W), np.float64)
+    wcnt = np.zeros((D, W), np.uint16)
     klass = np.zeros((D, W), np.uint8)
     intense = np.zeros((D, W), np.uint16)
 
@@ -140,6 +171,10 @@ def main():
             if ground.any():
                 np.add.at(gsum, (r1[ground], c1[ground]), z[ground])
                 np.add.at(gcnt, (r1[ground], c1[ground]), 1)
+            wet = inside & (cls == 9)
+            if wet.any():
+                np.add.at(wsum, (r1[wet], c1[wet]), z[wet])
+                np.add.at(wcnt, (r1[wet], c1[wet]), 1)
             sel = np.flatnonzero(inside)
             if len(sel):
                 rr, cc = r1[sel], c1[sel]
@@ -163,10 +198,31 @@ def main():
         dtm[holes] = dtm[rr[holes], cc[holes]]
     dtm = dtm.astype(np.float32)
 
+    # Class 9 is water. Open water often has no return at all, so grow that
+    # mask into empty cells, then one level for the whole bay. A bumpy max
+    # of water returns is what made the surface look like litter.
+    water = klass == PRIO[9]
+    empty = klass == 0
+    grow = water.copy()
+    for _ in range(6):
+        dil = grow.copy()
+        dil[1:] |= grow[:-1]
+        dil[:-1] |= grow[1:]
+        dil[:, 1:] |= grow[:, :-1]
+        dil[:, :-1] |= grow[:, 1:]
+        grow |= dil & empty
+    claimed = np.isin(klass, [PRIO[c] for c in (6, 17, 5, 4, 3, 2)])
+    water = (water | grow) & ~claimed
+    have = wcnt > 0
+    level = float(np.median(wsum[have] / wcnt[have])) if have.any() else 0.0
+    dtm[water] = level
+    print(f"bay level {level:.2f} m, water cells {int(water.sum())}", flush=True)
+
     dsm[~np.isfinite(dsm)] = np.nan
     missing = ~np.isfinite(dsm)
     ground_up = np.repeat(np.repeat(dtm, 2, 0), 2, 1)
     dsm[missing] = ground_up[missing]
+    dsm[np.repeat(np.repeat(water, 2, 0), 2, 1)] = level
     # A scanned roof should not sit below the ground under it.
     dsm = np.maximum(dsm, ground_up).astype(np.float32)
 
@@ -174,13 +230,21 @@ def main():
     color[:] = CLASS_RGB[2]
     for code, rgb in CLASS_RGB.items():
         color[klass == PRIO[code]] = rgb
-    # A little of the return strength, so one roof is not a flat stamp.
     shade = np.clip(0.75 + intense.astype(np.float32) / 4000, 0.75, 1.15)[..., None]
     color = np.clip(color * shade, 0, 255).astype(np.uint8)
+    try:
+        naip = fetch_naip_ortho()
+        print("naip ortho", naip.shape, flush=True)
+        # Blend 75 % real NAIP aerial photo with 25 % lidar-class shade so roofs, parks, pools, and palm canopies
+        # take their real Miami colors while keeping lidar return contrast.
+        color = np.clip(naip.astype(np.float32) * 0.78 + color.astype(np.float32) * 0.22, 0, 255).astype(np.uint8)
+        color[water] = CLASS_RGB[9]
+    except Exception as exc:
+        print(f"naip fallback to lidar class colors: {exc}", flush=True)
     orto = np.repeat(np.repeat(color, 5, 0), 5, 1)
 
     Path("data").mkdir(exist_ok=True)
-    np.savez_compressed("data/prep.npz", dsm=dsm, dtm=dtm, orto=orto)
+    np.savez_compressed("data/prep.npz", dsm=dsm, dtm=dtm, orto=orto, water=water)
     print("prep", "dsm", dsm.shape, float(np.nanmin(dsm)), float(np.nanmax(dsm)),
           "dtm", float(dtm.min()), float(dtm.max()), "orto", orto.shape, flush=True)
 

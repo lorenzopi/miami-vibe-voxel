@@ -33,6 +33,8 @@ const STEP = 1.05, HEAD = 1.9, GRAV = 16, TILT = Math.PI * 0.48, WALK_FOV = 65;
 
 export class Nav {
   mode: Mode = 'orbit';
+  /** What a left-drag does while orbiting. Right-drag always turns. */
+  drag: 'move' | 'turn' = 'move';
   ride: Ride | null = null;
   world: World | null = null;
   streamer: TileStreamer | null = null;
@@ -65,7 +67,9 @@ export class Nav {
 
   constructor(private readonly camera: THREE.PerspectiveCamera, private readonly controls: OrbitControls, private readonly dom: HTMLElement,
     scene: THREE.Scene, private readonly flyTo: (v: Pick<View, 'pos' | 'target'>) => void, private readonly onMode: (m: Mode, r: Ride | null) => void) {
-    controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+    // Drag is handled here. OrbitControls only zooms; its own pan never arrives in the embedded preview.
+    controls.enablePan = false;
+    controls.enableRotate = false;
     controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
     controls.maxPolarAngle = TILT;
     dom.style.cursor = 'grab';
@@ -86,8 +90,12 @@ export class Nav {
   // ------------------------------------------------------------------ input
   private axis(pos: Action, neg: Action) { return (this.keys.has(pos) ? 1 : 0) - (this.keys.has(neg) ? 1 : 0); }
 
+  private orbitMod = false;
+
   private bindKeys() {
+    const mod = (e: KeyboardEvent) => { this.orbitMod = e.metaKey || e.ctrlKey || e.shiftKey; };
     addEventListener('keydown', (e) => {
+      mod(e);
       if ((e.target as Element).closest?.('input:not([type=range]), textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
       this.shift = e.shiftKey;
       if (e.code === 'Escape') { if (this.mode !== 'orbit') this.flyUp(); return; }
@@ -104,28 +112,31 @@ export class Nav {
       e.preventDefault();
     });
     addEventListener('keyup', (e) => {
+      mod(e);
       this.shift = e.shiftKey;
       const k = KEYMAP[e.code];
       if (k) this.keys.delete(k);
       if (this.turned && ![...this.keys].some((a) => a[0] === 't')) { this.turned = false; this.retarget(); }
     });
-    addEventListener('blur', () => this.keys.clear());
+    addEventListener('blur', () => { this.keys.clear(); this.orbitMod = false; });
   }
 
   private bindPointer() {
     const dom = this.dom, ptrs = new Map<number, { x: number; y: number }>();
-    let press: { x: number; y: number; t: number; button: number; moved: boolean } | null = null;
+    let press: { x: number; y: number; t: number; button: number; moved: boolean; turn: boolean } | null = null;
     let pinch0: { d: number; fov: number } | null = null, twist: number | null = null;
     const two = () => [...ptrs.values()];
     dom.addEventListener('pointerdown', (e) => {
       (document.activeElement as HTMLElement | null)?.blur?.();
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (this.mode === 'orbit' && (e.button === 2 || (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey)) || ptrs.size === 2)) this.pivotAt(e.clientX, e.clientY);
+      const modified = e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey || this.orbitMod);
+      if (this.mode === 'orbit' && (e.button === 2 || modified || ptrs.size === 2)) this.pivotAt(e.clientX, e.clientY);
+      if (modified) e.preventDefault();
       if (ptrs.size === 2) { const [a, b] = two(); twist = Math.atan2(b.y - a.y, b.x - a.x); }
-      press = ptrs.size === 1 ? { x: e.clientX, y: e.clientY, t: performance.now(), button: e.button, moved: false } : null;
+      press = ptrs.size === 1 ? { x: e.clientX, y: e.clientY, t: performance.now(), button: e.button, moved: false, turn: e.button === 2 || modified || this.drag === 'turn' } : null;
       if (ptrs.size === 2 && this.mode !== 'orbit') { const [a, b] = two(); pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), fov: this.camera.fov }; }
-      if (this.mode !== 'orbit') dom.setPointerCapture(e.pointerId);
-      else dom.style.cursor = 'grabbing';
+      dom.setPointerCapture(e.pointerId);
+      if (this.mode === 'orbit') dom.style.cursor = 'grabbing';
       this.cancelFly();
     });
     dom.addEventListener('pointermove', (e) => {
@@ -140,7 +151,12 @@ export class Nav {
           const [a, b] = two(), ang = Math.atan2(b.y - a.y, b.x - a.x);
           this.orbitBy(Math.atan2(Math.sin(ang - twist), Math.cos(ang - twist)));
           twist = ang;
+          return;
         }
+        if (!press) return;
+        const turn = press.turn || press.button === 2 || this.drag === 'turn' || e.shiftKey || e.ctrlKey || e.metaKey || this.orbitMod;
+        if (turn) this.orbitDrag(dx, dy);
+        else this.panBy(dx, dy);
         return;
       }
       if (ptrs.size === 2 && pinch0) { const [a, b] = two(); this.setFov(pinch0.fov * pinch0.d / Math.max(20, Math.hypot(a.x - b.x, a.y - b.y))); return; }
@@ -269,6 +285,42 @@ export class Nav {
     s.theta += dyaw;
     s.phi = clamp(s.phi, 0.05, this.controls.maxPolarAngle);
     this.camera.position.copy(t).add(off.setFromSpherical(s));
+  }
+
+  /** Left-drag slides the map. Distance scales with how high you are, so a close view still crosses a block. */
+  private panBy(dx: number, dy: number) {
+    const cam = this.camera, target = this.controls.target;
+    cam.updateMatrixWorld();
+    const ground = this.world ? this.world.groundAt(cam.position.x, cam.position.z) : 0;
+    const height = Math.max(40, cam.position.y - ground, cam.position.distanceTo(target) * 0.35);
+    const scale = height * 0.0024;
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+    right.y = 0;
+    if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+    right.normalize();
+    // up × right is the way the camera looks across the ground. Camera +Z points backward,
+    // and using it made a downward grab slide the map up.
+    const forward = new THREE.Vector3().crossVectors(cam.up, right);
+    forward.y = 0;
+    if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+    forward.normalize();
+    const move = right.multiplyScalar(-dx * scale).addScaledVector(forward, dy * scale);
+    cam.position.add(move);
+    target.add(move);
+  }
+
+  private orbitDrag(dx: number, dy: number) {
+    const t = this.controls.target;
+    const s = new THREE.Spherical().setFromVector3(this.camera.position.clone().sub(t));
+    s.theta -= dx * 0.005;
+    s.phi = clamp(s.phi + dy * 0.004, 0.18, 1.35);
+    this.camera.position.copy(t).add(new THREE.Vector3().setFromSpherical(s));
+    this.controls.maxPolarAngle = Math.max(TILT, s.phi + 0.05);
+  }
+
+  setDrag(action: 'move' | 'turn') {
+    this.drag = action;
+    this.onMode(this.mode, this.ride);
   }
 
   // the focus goes onto what is in the middle of the screen (kept on the map), so turning pivots on it

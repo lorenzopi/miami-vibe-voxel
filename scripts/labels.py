@@ -637,7 +637,9 @@ def assemble(curated, osm, top_at):
         seen = set()
         for _oid, _typ, tags, geom in osm.areas:
             name = tags.get("name")
-            if not name or name in seen:
+            if not name or name in seen or "citadel hq" in name.lower():
+                continue
+            if tags.get("building") in ("construction", "proposed") or "construction" in tags or "proposed" in tags:
                 continue
             kind = tags.get("tourism") or tags.get("historic") or tags.get("amenity") or tags.get("leisure")
             if kind not in ("museum", "attraction", "hotel", "viewpoint", "gallery", "university",
@@ -651,10 +653,23 @@ def assemble(curated, osm, top_at):
             r, c = int(point.y), int(point.x)
             if not (0 <= r < D and 0 <= c < W):
                 continue
+            if "building" in tags and not kind and top_at(r, c) <= 6:
+                continue  # skip unbuilt footprints whose lidar top is still at ground level
             seen.add(name)
             far = 2200 if kind in ("museum", "attraction", "stadium", "university") else 700
             labels.append(dict(name=name, en=tags.get("name:en") or "", kind=kind or tags.get("building") or "place",
                                x=c, y=r, z=top_at(r, c), far=far))
+        for _oid, tags, pt in osm.nodes:
+            name = tags.get("name")
+            if not name or name in seen or tags.get("railway") != "station":
+                continue
+            r, c = int(pt.y), int(pt.x)
+            if not (0 <= r < D and 0 <= c < W):
+                continue
+            seen.add(name)
+            net = (tags.get("network") or tags.get("operator") or "").lower()
+            kind = "Metromover station" if "mover" in net or tags.get("station") == "monorail" else "Metrorail station"
+            labels.append(dict(name=name, en="", kind=kind, x=c, y=r, z=top_at(r, c) + 8, far=1200))
         return labels
     curated = list(curated)
     for facts, poly in landmarks.jazdow_houses(osm):

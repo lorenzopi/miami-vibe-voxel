@@ -16,11 +16,11 @@ import type { SearchItem } from './search';
 import { StreetLife } from './sim/life';
 import type { Kind, TrafficData } from './sim/types';
 import { TileStreamer } from './stream';
-import type { Facts, Label, Meta, View } from './types';
+import type { Facts, Label, Meta, Place, View } from './types';
 import { dateOf, dayOfYear, hourAt, solarNoon } from './sun';
 import { $, coarsePointer, ease, el, fetchJson, lerp } from './util';
 import { pkinLight } from './sky';
-import { type Climate, Precip, typical, type Weather, WEATHERS } from './weather';
+import { type Climate, fetchLiveWeather, type LiveWeather, Precip, typical, type Weather, WEATHERS } from './weather';
 import type { World } from './world';
 import { makeUniforms, makeVoxelMaterial, type BuildUniforms, type Engine, type ZoneUniforms } from './voxelMaterial';
 import './style.css';
@@ -44,7 +44,7 @@ const controls = makeControls();
 const post = makePost(renderer, scene, camera);
 const daylight = new Daylight(renderer, scene);
 const nav = new Nav(camera, controls, renderer.domElement, scene, (v) => flyTo(v), onMode);
-const bar = new Bar({ days: DAYS, weathers: ['typical', ...Object.keys(WEATHERS)], river: RIVER, onDay: (d) => { setDay(d); share(); },
+const bar = new Bar({ days: DAYS, weathers: ['live', 'typical', 'clear', 'cloudy', 'rain'], river: RIVER, onDay: (d) => { setDay(d); share(); },
   onDayEnd: () => { if (weatherName === 'typical') setWeather('typical'); },
   onHour: (h) => { setHour(h); share(); }, onWeather: (w) => { setWeather(w); share(); }, onRiver: (cm) => flood?.setGauge(cm) });
 const precip = new Precip(scene);
@@ -65,6 +65,7 @@ bar.showRiver(false);
 new ResizeObserver(() => { barRect = null; }).observe(bar.el);
 el('div', '', `<div><a href="https://github.com/lorenzopi/miami-vibe-voxel" target="_blank" rel="noopener">source</a></div>
   <div>2021 Miami-Dade lidar via <a href="https://www.fisheries.noaa.gov/inport/item/76028" target="_blank" rel="noopener">NOAA</a> and <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a></div>`).id = 'credits';
+el('div', '', `A <a href="https://github.com/stared/warsaw-vibe-voxel" target="_blank" rel="noopener">fork</a> by <a href="https://github.com/lorenzopi" target="_blank" rel="noopener">lorenzopi</a>`).id = 'byline';
 if (qs.get('ui') === '0') document.body.classList.add('noui');
 addEventListener('resize', onResize);
 addEventListener('keydown', (e) => {
@@ -142,17 +143,24 @@ function setDay(d: number) {
   setHour(was ? now[was] : daylight.hour);
 }
 
-function offerWeathers(d: number) {
-  const snow = climate?.snowy[d - 1] ?? true;
-  bar.offer('snow', snow);
-  if (!snow && weatherName === 'snow') setWeather('typical');
-}
+function offerWeathers(_d: number) {}
 
-let weatherName = 'typical';
+let weatherName = 'live';
+let liveWeather: LiveWeather | null = null;
 let fade: { from: Weather; to: Weather; t0: number } | null = null;
 function setWeather(name: string, now = false) {
   weatherName = name;
-  const t = name === 'typical' && climate ? typical(climate, daylight.day) : null;
+  if (name === 'live' && !liveWeather) {
+    bar.setWeather('live', 'looking up…');
+    fetchLiveWeather().then((lw) => {
+      liveWeather = lw;
+      if (weatherName === 'live') setWeather('live');
+    }).catch(() => {
+      if (weatherName === 'live') setWeather('typical');
+    });
+    return;
+  }
+  const t = name === 'live' ? liveWeather : name === 'typical' ? typical(climate, daylight.day) : null;
   const to = t?.w ?? WEATHERS[name] ?? WEATHERS.clear;
   bar.setWeather(name, t?.said ?? '');
   fade = now ? null : { from: { ...daylight.weather }, to, t0: performance.now() };
@@ -174,7 +182,7 @@ function share() {
     const d = dateOf(daylight.day);
     qs.set('date', `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     qs.set('hour', daylight.hour.toFixed(2));
-    if (weatherName !== 'typical') qs.set('weather', weatherName); else qs.delete('weather');
+    if (weatherName !== 'live') qs.set('weather', weatherName); else qs.delete('weather');
     history.replaceState(null, '', `?${qs}`);
   }, 400);
 }
@@ -224,10 +232,14 @@ function followNearest(kind: Kind) {
   if (ag) nav.startRide(ag);
 }
 
-function searchItems(meta: Meta): SearchItem[] {
+function searchItems(meta: Meta, places: Place[] = []): SearchItem[] {
+  const seen = new Set(meta.labels.map((l) => l.name));
   return [
     ...Object.values(meta.views).map((v) => ({ name: v.label, kind: 'viewpoint', featured: true, go: () => goView(v) })),
     ...meta.labels.map((l) => ({ name: l.name, alt: [l.en, l.alt].join(' '), kind: l.kind, go: () => goPlace(l.x, l.y, Math.max(40, (l.R ?? 20) * 1.4), null, l.name) })),
+    ...places.filter(([name]) => !seen.has(name)).map(([name, kind, x, y, size, alt]) => ({
+      name, alt: alt ?? '', kind, go: () => goPlace(x, y, size, { name, kind }, name),
+    })),
     { name: 'Follow a car', alt: 'car bus ride follow', kind: 'action', go: () => followNearest('car') },
     { name: 'Follow someone', alt: 'person people walk follow', kind: 'action', go: () => followNearest('person') },
   ];
@@ -245,10 +257,11 @@ function keepInside() {
 
 async function boot() {
   let meta: Meta;
-  [meta, climate] = await Promise.all([fetchJson<Meta>('data/meta.json'), fetchJson<Climate>('data/climate.json')]);
+  [meta, climate] = await Promise.all([fetchJson<Meta>('data/meta.json'), fetchJson<Climate>('data/climate.json').catch(() => null)]);
   views = meta.views;
   uniforms = makeUniforms(meta, engine);
-  loadFoliage(meta, uniforms).catch((e) => console.warn('foliage', e));
+  // Warsaw's phenology.json and foliage.bin are deciduous Central European trees and a 3950×3150 m grid;
+  // loading them on Miami strips the palms bare in November and misaligns the 4200×3800 m texture.
   loadWindows(meta, uniforms).then((set) => { setWindows = set; }).catch((e) => console.warn('windows', e));
   streamer = new TileStreamer(meta, makeVoxelMaterial(uniforms), scene);
   world = nav.world = streamer.world;
@@ -263,7 +276,8 @@ async function boot() {
   daylight.theta = (meta.theta_deg || 0) * Math.PI / 180;
   const md = qs.get('date')?.split('-').map(Number);
   setDay(md ? dayOfYear(new Date(new Date().getFullYear(), md[0] - 1, md[1])) : TODAY);
-  setWeather((qs.get('weather') ?? '') in WEATHERS ? qs.get('weather')! : 'typical', true);
+  const wq = qs.get('weather') ?? '';
+  setWeather(wq in WEATHERS || wq === 'typical' || wq === 'live' ? wq : 'live', true);
   setHour(qs.get('hour') ? +qs.get('hour')! : timesOf(daylight.day)['golden hour']);
   if (engine === 'zones') {
     await (await import('./zones')).installZones({ streamer, uniforms: uniforms as typeof uniforms & ZoneUniforms, meta, focus, qs, composer: post.composer, n8: post.n8, camera });
@@ -275,9 +289,9 @@ async function boot() {
   if (city) labels.gate = city.gate;
   hud = new Hud(renderer.domElement, nav.mode, (action) => nav.setDrag(action));
   bar.search.setItems(searchItems(meta));
+  fetchJson<{ places: Place[] }>('data/places.json').then((p) => bar.search.setItems(searchItems(meta, p.places))).catch(() => {});
   fountains = new Fountains(scene, meta.jets ?? []);
-  flood = new Flood(scene, uniforms, meta);
-  flood.load().then(() => { bar.river.input.disabled = false; flood!.setGauge(RIVER.typical); }).catch((e) => console.warn('flood', e));
+  // flood.bin is Warsaw's Vistula embankment grid (3950×3150 m); do not load it onto Biscayne Bay.
   fetchJson<TrafficData>('data/traffic.json').then((td) => {
     life = nav.life = new StreetLife(scene, td);
     life.world = world;

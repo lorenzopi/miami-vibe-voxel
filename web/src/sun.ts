@@ -1,12 +1,17 @@
-const RAD = Math.PI / 180, LAT = 52.23 * RAD, LON = 21.01;
+const RAD = Math.PI / 180, LAT = 25.763 * RAD, LON = -80.19;
 
-const lastSunday = (year: number, month: number) => { const d = new Date(Date.UTC(year, month + 1, 0)); return d.getUTCDate() - d.getUTCDay(); };
+const nthSunday = (year: number, month: number, n: number) => {
+  const first = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  return 1 + ((7 - first) % 7) + (n - 1) * 7;
+};
 export const dayOfYear = (d: Date) => Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(d.getFullYear(), 0, 0)) / 864e5);
 export const dateOf = (day: number, year = new Date().getFullYear()) => new Date(year, 0, day);
 
+// US Eastern: EDT (UTC-4) from the second Sunday in March to the first Sunday in November, else EST (UTC-5).
 export function utcOffset(day: number, year = new Date().getFullYear()) {
-  const start = dayOfYear(new Date(year, 2, lastSunday(year, 2))), end = dayOfYear(new Date(year, 9, lastSunday(year, 9)));
-  return day >= start && day < end ? 2 : 1;
+  const start = dayOfYear(new Date(year, 2, nthSunday(year, 2, 2)));
+  const end = dayOfYear(new Date(year, 10, nthSunday(year, 10, 1)));
+  return day >= start && day < end ? -4 : -5;
 }
 
 // NOAA low-precision declination and equation of time
