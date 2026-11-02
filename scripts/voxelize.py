@@ -416,15 +416,16 @@ for oid, t, line in osm.lines:
             ln = line.offset_curve(off) if abs(off) > 0.2 else line
         except Exception:
             continue
-        if ln.is_empty or ln.length < 4:
-            continue
-        solid = (not oneway) and abs(off) < 0.6
-        if solid:
-            lane_lines.append(ln)
-        else:
-            L = ln.length
-            for s in np.arange(1.0, L - 1, 9.0):
-                lane_lines.append(substring(ln, s, min(s + 3, L)))
+        for ln in getattr(ln, "geoms", [ln]):
+            if ln.geom_type != "LineString" or ln.is_empty or ln.length < 4:
+                continue
+            solid = (not oneway) and abs(off) < 0.6
+            if solid:
+                lane_lines.append(ln)
+            else:
+                length = ln.length
+                for s in np.arange(1.0, length - 1, 9.0):
+                    lane_lines.append(substring(ln, s, min(s + 3, length)))
 lm = np.zeros((D, W), np.uint16)
 burn(lm, [(l, 1) for l in lane_lines], all_touched=False)
 lm_mask = (lm > 0) & np.isin(gcol, [C["asphalt"]])
@@ -482,7 +483,7 @@ for p in parts:
     p["render"] = True
 render = [f for f in feats if f["render"]]
 
-pkin = next(f for f in feats if f["tags"].get("name") == "Pałac Kultury i Nauki")
+pkin = next((f for f in feats if f["tags"].get("name") == "Pałac Kultury i Nauki"), None)
 
 
 def tag(f, k):
@@ -660,7 +661,7 @@ def wall_style(f):
         (parse_colour(f["parent"]["tags"].get("building:colour")) if f.get("parent") else None)
     btype = tag(f, "building") or ""
     h = f["maxh"] or float(np.median(top[f["rr"], f["cc"]]))
-    inside_pkin = pkin["geom"].contains(f["geom"].representative_point())
+    inside_pkin = pkin is not None and pkin["geom"].contains(f["geom"].representative_point())
     if inside_pkin:
         # OSM tags the stone #C6AE7F, a khaki; in photos the weathered sandstone is a mid warm grey (median 118,112,104 overcast, 2026)
         if col is None or col == hex_rgb("#c6ae7f"):
@@ -689,7 +690,7 @@ def roof_style(f):
     if col is None and (f["tags"].get("roof:material") or "").lower() == "glass":
         return pal(soften(hex_rgb("#93adbf"), 0.06), M_GLASS)  # glass atrium roofs (Politechnika's hall): blue-grey
     h = float(np.median(top[f["rr"], f["cc"]]))
-    if pkin["geom"].contains(f["geom"].representative_point()) and col == hex_rgb("#666666"):
+    if pkin is not None and pkin["geom"].contains(f["geom"].representative_point()) and col == hex_rgb("#666666"):
         # OSM's dark grey: the ortho shows light stone-grey roofs (its own colours carry the tower's shadow)
         return pal(soften(hex_rgb("#bab3a5"), 0.05), M_ROOF, q=12)
     if h < 40:
@@ -1567,8 +1568,9 @@ if os.environ.get("LMCACHE"):  # the volume before the curated landmark details,
                      trunk_ok=trunk_ok_db, piers=landmarks.PIERS),
                 open("data/cache/pre_state.pkl", "wb"))
 labels, views = landmarks.details(vol, g, top, topi, bmask, feats, pal, C, osm, cells_of, note, leaf_ids)
-np.savez_compressed("data/debug/pkin_box.npz", vol=vol[:, 1080:1380, 600:900], g=g[1080:1380, 600:900],
-                    pal=np.array(pal.entries, np.int32))  # PKiN's block for facade work (r0=1080, c0=600)
+if vol.shape[1] > 1380 and vol.shape[2] > 900:
+    np.savez_compressed("data/debug/pkin_box.npz", vol=vol[:, 1080:1380, 600:900], g=g[1080:1380, 600:900],
+                        pal=np.array(pal.entries, np.int32))  # PKiN's block for facade work (r0=1080, c0=600)
 
 import labels as labels_mod
 labels = labels_mod.assemble(labels, osm, lambda r, c: int(g[r, c] + (topi[r, c] if bmask[r, c] else 0)))
@@ -1618,10 +1620,17 @@ for ln in sorted(tram_lines, key=lambda l: -l.length):
         path.append([round(p.x, 1), round(p.y, 1), int(g[r, c])])
     trams.append(path)
 note("tram paths:", len(trams), "total km", round(sum(len(p) for p in trams) * 2 / 1000, 2))
-meta = dict(W=W, D=D, H=Hm, base=BASE, tiles=tile_info, center=[CX, CY], theta_deg=math.degrees(THETA), crs="EPSG:2180", trams=trams, jets=jets,
+from aoi import CITY
+_sources = (dict(osm=osm.timestamp,
+                 lidar="Miami-Dade ITD lidar, 7-9 April 2021, via NOAA Digital Coast (public domain)",
+                 ortho="lidar class and intensity; no 5 cm orthophoto in this build")
+            if CITY == "miami" else
+            dict(osm=osm.timestamp, lidar="GUGiK NMPT/NMT 2025 (GK-FOTO.6201.5.2025)",
+                 ortho="GUGiK ortofotomapa 2025, 5 cm"))
+meta = dict(W=W, D=D, H=Hm, base=BASE, tiles=tile_info, center=[CX, CY], theta_deg=math.degrees(THETA),
+            crs="EPSG:6346" if CITY == "miami" else "EPSG:2180", trams=trams, jets=jets,
             palette=[list(e) for e in pal.entries], lamps=lamps, floods=floods, labels=labels, views=views,
-            sources=dict(osm=osm.timestamp, lidar="GUGiK NMPT/NMT 2025 (GK-FOTO.6201.5.2025)",
-                         ortho="GUGiK ortofotomapa 2025, 5 cm"))
+            sources=_sources)
 json.dump(meta, open(OUT / "meta.json", "w"))
 import traffic
 # QA aid: drivable-surface mask (1 = carriageway/road area, 2 = tram bed) for web/tools/qa.mjs

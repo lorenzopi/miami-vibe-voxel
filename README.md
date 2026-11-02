@@ -1,3 +1,14 @@
+# Miami branch
+
+This branch is a fork of [stared/warsaw-vibe-voxel](https://github.com/stared/warsaw-vibe-voxel). The grid, the voxelizer, and the viewer are his. The elevation is not: `scripts/fetch_miami_lidar.py` samples the public 2021 Miami-Dade lidar (NOAA Digital Coast, flown 7–9 April 2021) into the same `dsm` / `dtm` / `orto` arrays his pipeline reads.
+
+The diorama is Brickell and Downtown, east across the bay to the MacArthur Causeway. The 2021 flight is 615 square miles of Miami-Dade, so Key Largo and the Everglades west of the developed county are outside it. Roof colour comes from the lidar class, not from a 5 cm orthophoto. Warsaw-only landmark modelling (the Palace, the bridges on the Vistula) is skipped.
+
+```sh
+sh scripts/build_miami.sh
+cd web && pnpm install && pnpm dev
+```
+
 # Warszawa Śródmieście in voxels
 
 A 3950 × 3150 m diorama of central Warsaw at 1 m voxels, anchored on the PKiN spire and rotated 21.5° to the Palace axes (so walls and the street grid are not staircased), in the style of MagicaVoxel renders (ephtracy). It covers:

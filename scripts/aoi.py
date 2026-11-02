@@ -1,24 +1,31 @@
-"""Area of interest shared by all pipeline steps.
+"""Miami diorama, on the same grid convention as the Warsaw original.
 
-The voxel grid is anchored on the PKiN spire and rotated to the Palace's own axes, so its walls (and the
-Śródmieście street grid, which shares the orientation within ~1°) fall on voxel faces instead of staircases.
-THETA was measured from 443 OSM wall edges of the PKiN complex (weighted mean 21.5°, mod 90).
+The Warsaw map is anchored on the Palace spire and rotated 21.5°. Miami's
+Brickell and Downtown grids already run nearly north-south, so this grid is
+cardinal. It is anchored on Panorama Tower.
 
-World coords: EPSG:2180 (PL-1992), x = easting, y = northing.
-Grid coords: (i, j) continuous, i = column (along PKiN's E-W facade), j = row (along its N-S facade,
-growing roughly south); cell (c, r) spans [c, c+1) x [r, r+1).
+World coords: EPSG:6346, NAD83(2011) / UTM zone 17N, the CRS of the 2021
+Miami-Dade lidar. x = easting, y = northing.
+Grid coords: column i grows east, row j grows south. Cell (c, r) is 1 m.
+
+The 2021 county flight covers 615 square miles of Miami-Dade, not Monroe
+County and not the Everglades west of the developed county. This rectangle
+is the Brickell and Downtown portion of that flight: south through south
+Brickell, north past Freedom Tower, east across the bay to the MacArthur
+Causeway. A wider rectangle (the Beach, Wynwood, the Gables) is the same
+code with a larger W and D; his 1 m volume is a diorama, not the whole county.
 """
 import math
 
 import numpy as np
 
-CX, CY = 636965.62, 486975.12  # PKiN spire (OSM way 240119160), EPSG:2180
-THETA = math.radians(21.5)
-# 3950 x 3000 m: from the Rondo ONZ towers east across the Vistula to PGE Narodowy, north to Ogród Saski,
-# south past Trasa Łazienkowska (Al. Armii Ludowej down to Politechnika, Most Łazienkowski). The original 1500 m square around PKiN is the block
-# i in [0, 1500), j in [480, 1980) -- same cells, shifted 480 rows (whole metres, so nothing is resampled).
-W, D = 3950, 3150
-I0, J0 = 750, 1230  # grid position of the PKiN spire
+CITY = "miami"
+
+# Panorama Tower, 1100 Brickell Bay Drive. EPSG:6346.
+CX, CY = 581189.4, 2849694.2
+THETA = 0.0
+W, D = 4200, 3800
+I0, J0 = 1200, 2100  # grid position of Panorama Tower
 RAW = "data/raw"
 
 EU = np.array([math.cos(THETA), math.sin(THETA)])   # grid +i in world

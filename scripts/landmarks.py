@@ -488,6 +488,10 @@ def small_tree(vol, g, r, c, h, leaves, trunk, height=None):
 
 def details_geometry(vol, g, feats, pal, note):
     """Every curated change to the landmarks' voxels (also run alone by patch.py on the cached volume)."""
+    from aoi import CITY
+    if CITY == "miami":
+        note("miami: Warsaw landmark geometry left off; roofs come from the 2021 lidar")
+        return
     pkin_clock(vol, g, feats, pal, note)
     regularize_walls(vol, g, feats, note)
     teatr_wielki_centre(vol, g, pal, note)
@@ -629,6 +633,8 @@ def details(vol, g, top, topi, bmask, feats, pal, C, osm, cells_of, note, leaf_i
     from aoi import to_grid
     for n, facts in EXTRA_LABELS.items():
         c, r = (int(v) for v in to_grid(*facts["at"]))
+        if not (0 <= r < vol.shape[1] and 0 <= c < vol.shape[2]):
+            continue
         labels.append(label(n, facts, c, r, top_at(r, c)))
     note("labels:", [l["name"] for l in labels])
     return labels, make_views(found, osm, g, top_at, note, bmask, vol, leaf_ids)
@@ -644,6 +650,10 @@ def make_views(found, osm, g, top_at, note, bmask, vol=None, leaf_ids=()):
         return [t[0] + off[0], t[1] + off[1], t[2] + off[2]]
 
     views = {}
+    if "Pałac Kultury i Nauki" not in found:
+        from aoi import D, W
+        cx, cz = W / 2, D / 2
+        return {"overview": dict(label="Brickell", target=[cx, 40, cz], pos=[cx - 600, 900, cz + 1400])}
     pk = at("Pałac Kultury i Nauki")
     views["overview"] = dict(label="Overview", target=[pk[0], 20, pk[2]], pos=add([pk[0], 20, pk[2]], (-420, 860, 1180)))
     views["pkin"] = dict(label="Palace", target=[pk[0], 110, pk[2]], pos=add([pk[0], 110, pk[2]], (420, 160, 300)))

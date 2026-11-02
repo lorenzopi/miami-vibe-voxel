@@ -8,9 +8,10 @@ from pyproj import Transformer
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import polygonize, unary_union
 
-from aoi import RAW, to_grid as _aoi_grid
+from aoi import CITY, RAW, to_grid as _aoi_grid
 
-_T = Transformer.from_crs(4326, 2180, always_xy=True)
+# Warsaw is EPSG:2180. The Miami branch is the 2021 lidar CRS, EPSG:6346.
+_T = Transformer.from_crs(4326, 6346 if CITY == "miami" else 2180, always_xy=True)
 
 
 def to_grid(lon, lat):

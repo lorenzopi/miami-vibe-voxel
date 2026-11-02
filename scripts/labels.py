@@ -631,6 +631,31 @@ def finish(labels, curated_views, curated_sites):
 
 
 def assemble(curated, osm, top_at):
+    from aoi import CITY, D, W
+    if CITY == "miami":
+        labels = list(curated)
+        seen = set()
+        for _oid, _typ, tags, geom in osm.areas:
+            name = tags.get("name")
+            if not name or name in seen:
+                continue
+            kind = tags.get("tourism") or tags.get("historic") or tags.get("amenity") or tags.get("leisure")
+            if kind not in ("museum", "attraction", "hotel", "viewpoint", "gallery", "university",
+                            "theatre", "arts_centre", "stadium", "park", "marina") and "building" not in tags:
+                continue
+            if tags.get("building") in ("house", "garage", "shed", "roof", "kiosk") and not kind:
+                continue
+            if "building" in tags and not kind and not tags.get("height") and not tags.get("building:levels"):
+                continue
+            point = geom.representative_point()
+            r, c = int(point.y), int(point.x)
+            if not (0 <= r < D and 0 <= c < W):
+                continue
+            seen.add(name)
+            far = 2200 if kind in ("museum", "attraction", "stadium", "university") else 700
+            labels.append(dict(name=name, en=tags.get("name:en") or "", kind=kind or tags.get("building") or "place",
+                               x=c, y=r, z=top_at(r, c), far=far))
+        return labels
     curated = list(curated)
     for facts, poly in landmarks.jazdow_houses(osm):
         p = poly.representative_point()
