@@ -46,9 +46,9 @@ export class LifeMeshes {
       std({ vertexColors: true, roughness: 0.15, metalness: 0.5 }), C, { shadow: true });
     this.head = instanced(merge(box(0.4, 0.2, 0.1, -0.6, 0.65, 2.2), box(0.4, 0.2, 0.1, 0.6, 0.65, 2.2)), this.headMat, C);
     this.tail = instanced(merge(box(0.4, 0.2, 0.1, -0.6, 0.7, -2.2), box(0.4, 0.2, 0.1, 0.6, 0.7, -2.2)), new THREE.MeshBasicMaterial({ color: 0xffffff }), C, { color: true });
-    const L = tramSection; // Warsaw livery: yellow body, red skirt, light roof gear
-    this.tram = instanced(merge(box(2.4, 0.9, L, 0, 0.15, 0, 0xc8322b), box(2.4, 1.9, L, 0, 1.05, 0, 0xf2c230), box(2.0, 0.35, L - 0.8, 0, 2.95, 0, 0xd9d6cf)),
-      std({ vertexColors: true, roughness: 0.45, metalness: 0.1 }), MAX_TRAM_SECTIONS, { shadow: true });
+    const L = tramSection; // Miami Metromover livery: crisp white body, teal lower band, aqua stripe
+    this.tram = instanced(merge(box(2.4, 0.75, L, 0, 0.15, 0, 0x00858a), box(2.4, 0.2, L, 0, 0.9, 0, 0xf27d21), box(2.4, 1.85, L, 0, 1.1, 0, 0xf3f5f7), box(2.0, 0.35, L - 0.8, 0, 2.95, 0, 0xd9dce0)),
+      std({ vertexColors: true, roughness: 0.35, metalness: 0.18 }), MAX_TRAM_SECTIONS, { shadow: true });
     this.tramWin = instanced(box(2.46, 0.85, L - 1.2, 0, 1.6, 0), this.tramWinMat, MAX_TRAM_SECTIONS);
     const P = MAX_PEOPLE;
     this.legs = instanced(merge(box(0.18, 0.85, 0.22, -0.1, 0, 0, 0x2b3240), box(0.18, 0.85, 0.22, 0.1, 0, 0, 0x2b3240),

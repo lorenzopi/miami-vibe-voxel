@@ -141,7 +141,18 @@ dsm_mean = d4.mean((1, 3))
 dtm_s = ndimage.uniform_filter(dtm, 3)
 SLAB = 3
 BASE = math.floor(dtm.min()) - SLAB
-g = np.round(dtm_s - BASE).astype(np.int32)  # ground occupies z in [0, g)
+
+
+def ground_walls(dtm, dtm_s):
+    """Snap retaining walls (underpasses, ramps, seawalls) cleanly instead of ramping over 3 m."""
+    med = ndimage.median_filter(dtm, 3)
+    lo, hi = ndimage.minimum_filter(med, 5), ndimage.maximum_filter(med, 5)
+    wall = (ndimage.maximum_filter(dtm, 3) - ndimage.minimum_filter(dtm, 3) >= 3) & (hi - lo >= 3)
+    note("ground: wall cells snapped to their level:", int(wall.sum()))
+    return np.where(wall, np.where(ndimage.gaussian_filter(dtm, 1.5) >= (lo + hi) / 2, hi, lo), dtm_s)
+
+
+g = np.round(ground_walls(dtm, dtm_s) - BASE).astype(np.int32)  # ground occupies z in [0, g)
 nd_max = dsm_max - dtm
 nd_mean = dsm_mean - dtm
 
@@ -375,7 +386,7 @@ burn(gcol, area_hw)
 is_road = road_mask > 0
 
 # rails, trams, Metromover (monorail) & Metrorail (elevated subway)
-rail_beds, rails = [], []
+rail_beds, rails, bridge_rails = [], [], []
 guideway_lines = []
 for oid, t, line in osm.lines_with("railway"):
     rk = t["railway"]
@@ -393,6 +404,11 @@ for oid, t, line in osm.lines_with("railway"):
         bridge_lines.append((line, hw, lay, col_))
         if rk in ("monorail", "subway"):
             guideway_lines.append((line, lay))
+        for off in (-0.72, 0.72):
+            try:
+                bridge_rails.append((line.offset_curve(off), C["rail"]))
+            except Exception:
+                pass
         continue
     rail_beds.append((line.buffer(hw, cap_style="flat"), C["trambed" if tram else "ballast"]))
     for off in (-0.72, 0.72):
@@ -901,6 +917,16 @@ for zz in range(H):
     vol[zz][m] = C["soil"]
 rr, cc = np.nonzero(np.ones((D, W), bool))
 vol[g[rr, cc] - 1, rr, cc] = gcol[rr, cc]
+# Retaining walls (paved ground 2 m+ above a neighbour) get concrete faces instead of brown soil
+_nb_lo = ndimage.minimum_filter(g, footprint=np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]))
+_mat = np.array([e[3] for e in pal.entries] + [0] * 256)
+_wall = (g - _nb_lo >= 2) & ~np.isin(_mat[gcol], [M_GRASS, M_LEAF, M_SOIL, M_WATER])
+n_rw = 0
+for zz in range(int(_nb_lo[_wall].min()) if _wall.any() else 0, int(g.max())):
+    m = _wall & (zz >= _nb_lo) & (zz < g - 1)
+    vol[zz][m] = C["concrete"]
+    n_rw += int(m.sum())
+note("retaining walls (paved ground 2 m+ over a neighbour): concrete voxels", n_rw)
 
 # buildings: base fill with the tallest covering feature's wall, then parts paint their own [minh, maxh)
 basewall = np.zeros((D, W), np.uint16)
@@ -1475,7 +1501,7 @@ if prof:
         sel_ = allp[:, 3] == L_
         sub_ = allp[sel_]
         nb_ = cKDTree(sub_[:, :2]).query_ball_point(sub_[:, :2], 10.0)
-        allp[sel_, 2] = [np.median(sub_[i_, 2]) for i_ in nb_]
+        allp[sel_, 2] = [np.percentile(sub_[i_, 2], 10) for i_ in nb_]
     k0 = 0
     for i_, pw_ in enumerate(prof):
         h_ = allp[k0:k0 + len(pw_), 2]
@@ -1540,6 +1566,28 @@ for _z in range(int(g.min()), int(zt_.max()) + 6):
     _v = vol[_z, _rw[_m], _cw[_m]]
     _under = _z < zt_[_rw[_m], _cw[_m]] - 2
     vol[_z, _rw[_m], _cw[_m]] = np.where((_under & _wet[_m]) | _leafy[_v], 0, _v)  # (a crown poking through the deck too)
+# Remove leaves hanging off bridge deck edges over water (within 3 m)
+_rim = ndimage.binary_dilation(deck, iterations=3) & ~deck & water_
+_rr, _cr = np.nonzero(_rim)
+n_rim = 0
+for _z in range(int(g.min()), int(zt_.max()) + 6):
+    _v = vol[_z, _rr, _cr]
+    _k = _leafy[_v]
+    vol[_z, _rr[_k], _cr[_k]] = 0
+    n_rim += int(_k.sum())
+note("leaves off the water beside the decks:", n_rim)
+_way = (deck_col > 0) & (deck_col != C["deck"])
+_dw, (_iw, _jw) = ndimage.distance_transform_edt(~_way, return_indices=True)
+_fill = deck & (deck_col == C["deck"]) & (deck_col[_iw, _jw] == C["ballast"]) & (_dw <= 4)
+deck_col[_fill] = C["ballast"]
+_lm_deck = deck & (lm > 0) & (deck_col == C["asphalt"])
+deck_col[_lm_deck] = C["mark"]
+note("lane marking cells on decks:", int(_lm_deck.sum()))
+_rl = np.zeros((D, W), np.uint16)
+burn(_rl, bridge_rails + rails, all_touched=True)
+_on = deck & (_rl > 0) & np.isin(deck_col, [C["ballast"], C["deck"]])
+deck_col[_on] = _rl[_on]
+note("rail decks: ballast fill", int(_fill.sum()), "rail cells", int(_on.sum()))
 rr, cc = np.nonzero(deck)
 if len(rr):
     zt_d = zt_[rr, cc]

@@ -21,6 +21,7 @@ const MOUSE: Record<Mode, [string, string, string][]> = {
   ride: [['l', mouse('l', true), 'look'], ['Escape', ESC, 'fly up']],
 };
 const WHO: Record<string, string> = { person: 'Following a pedestrian', car: 'Following a car', bus: 'Following a bus', tram: 'Following Metromover' };
+const TRAM_LINE: Record<string, string> = { '1': 'Metromover Omni Loop', '2': 'Metromover Inner Loop', '3': 'Metromover Brickell Loop' };
 
 // the key legend, bottom left: keys and mouse gestures as outlines, lit while in use
 export class Hud {
@@ -49,7 +50,10 @@ export class Hud {
   }
 
   set(mode: Mode, ride: Ride | null) {
-    $('.who', this.box).textContent = mode === 'ride' && ride && ride.label !== 'you' ? WHO[ride.label] ?? (/^tram \w/.test(ride.label) ? `Following ${ride.label}` : WHO[ride.kind]) : '';
+    const m = ride?.label ? /^tram (\w+)/.exec(ride.label) : null;
+    $('.who', this.box).textContent = mode === 'ride' && ride && ride.label !== 'you'
+      ? WHO[ride.label] ?? (m ? `Following ${TRAM_LINE[m[1]] ?? `Metromover ${m[1]}`}` : WHO[ride.kind])
+      : '';
     if (this.touch) return;
     const items = [...MOUSE[mode]];
     if (mode === 'walk' || ride?.kind === 'person') items.splice(items.length - 1, 0, ['Space', SPACE, 'jump']);
