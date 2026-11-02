@@ -16,7 +16,7 @@ import type { SearchItem } from './search';
 import { StreetLife } from './sim/life';
 import type { Kind, TrafficData } from './sim/types';
 import { TileStreamer } from './stream';
-import type { Facts, Label, Meta, Place, View } from './types';
+import type { Facts, Label, Meta, View } from './types';
 import { dateOf, dayOfYear, hourAt, solarNoon } from './sun';
 import { $, coarsePointer, ease, el, fetchJson, lerp } from './util';
 import { pkinLight } from './sky';
@@ -33,7 +33,7 @@ declare global {
 const RIVER = { 'tiny creek': -355, 'record low': 104, typical: 185, '2010 flood': 879, '1844 flood': 963 }; // below the record, the estimated bed (scripts/flood.py)
 
 const TODAY = dayOfYear(new Date());
-const DAYS = { midsummer: 172, midwinter: 355, today: TODAY };
+const DAYS = { 'wet season': 135, 'dry season': 305, today: TODAY };
 
 const qs = new URLSearchParams(location.search);
 const engine = pickEngine();
@@ -63,8 +63,8 @@ nav.cancelFly = () => { fly = null; };
 bar.setRiver(RIVER.typical);
 bar.showRiver(false);
 new ResizeObserver(() => { barRect = null; }).observe(bar.el);
-el('div', '', `<div>by <a href="https://p.migdal.pl/" target="_blank" rel="noopener">Piotr Migdał</a> & <a href="https://quesma.com/blog/invisible-cities-one-shot/" target="_blank" rel="noopener">Opus 5.5</a>, <a href="https://github.com/stared/warsaw-vibe-voxel" target="_blank" rel="noopener">source code</a></div>
-  <div>based on GUGiK 2025 and <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a></div>`).id = 'credits';
+el('div', '', `<div><a href="https://github.com/lorenzopi/miami-vibe-voxel" target="_blank" rel="noopener">source</a></div>
+  <div>2021 Miami-Dade lidar via <a href="https://www.fisheries.noaa.gov/inport/item/76028" target="_blank" rel="noopener">NOAA</a> and <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a></div>`).id = 'credits';
 if (qs.get('ui') === '0') document.body.classList.add('noui');
 addEventListener('resize', onResize);
 addEventListener('keydown', (e) => {
@@ -228,11 +228,8 @@ function searchItems(meta: Meta): SearchItem[] {
   return [
     ...Object.values(meta.views).map((v) => ({ name: v.label, kind: 'viewpoint', featured: true, go: () => goView(v) })),
     ...meta.labels.map((l) => ({ name: l.name, alt: [l.en, l.alt].join(' '), kind: l.kind, go: () => goPlace(l.x, l.y, Math.max(40, (l.R ?? 20) * 1.4), null, l.name) })),
-    { name: 'Follow a tram', alt: 'tramwaj tram ride follow jedź', kind: 'action', go: () => followNearest('tram') },
-    { name: 'Follow a car', alt: 'samochód car bus autobus ride follow jedź', kind: 'action', go: () => followNearest('car') },
-    { name: 'Zouk at Kopernik', alt: 'dance taniec zouk Centrum Nauki Kopernik evening wieczór', kind: 'action',
-      go: () => { if (daylight.hour < 19 || daylight.hour > 23) setHour(20.5); goPlace(2626, 741, 30, { name: 'Zouk', kind: 'dancing in the evenings' }); } },
-    { name: 'Follow someone', alt: 'person people pieszy przechodzień idź walk with follow', kind: 'action', go: () => followNearest('person') },
+    { name: 'Follow a car', alt: 'car bus ride follow', kind: 'action', go: () => followNearest('car') },
+    { name: 'Follow someone', alt: 'person people walk follow', kind: 'action', go: () => followNearest('person') },
   ];
 }
 
@@ -251,8 +248,7 @@ async function boot() {
   [meta, climate] = await Promise.all([fetchJson<Meta>('data/meta.json'), fetchJson<Climate>('data/climate.json')]);
   views = meta.views;
   uniforms = makeUniforms(meta, engine);
-  loadFoliage(meta, uniforms).then((city) => bar.setDays({ 'leaves out': city.leaf, 'trees in colour': city.colour, 'leaves down': city.fall, ...DAYS }))
-    .catch((e) => console.warn('foliage', e));
+  loadFoliage(meta, uniforms).catch((e) => console.warn('foliage', e));
   loadWindows(meta, uniforms).then((set) => { setWindows = set; }).catch((e) => console.warn('windows', e));
   streamer = new TileStreamer(meta, makeVoxelMaterial(uniforms), scene);
   world = nav.world = streamer.world;
@@ -277,10 +273,8 @@ async function boot() {
   }
   labels = new Labels(meta.labels, onLabel);
   if (city) labels.gate = city.gate;
-  hud = new Hud(renderer.domElement, nav.mode);
+  hud = new Hud(renderer.domElement, nav.mode, (action) => nav.setDrag(action));
   bar.search.setItems(searchItems(meta));
-  fetchJson<{ places: Place[] }>('data/places.json').then(({ places }) => bar.search.setItems([...searchItems(meta),
-    ...places.map(([name, kind, x, y, size, alt]) => ({ name, alt, kind, go: () => goPlace(x, y, size, { name, kind }) }))]));
   fountains = new Fountains(scene, meta.jets ?? []);
   flood = new Flood(scene, uniforms, meta);
   flood.load().then(() => { bar.river.input.disabled = false; flood!.setGauge(RIVER.typical); }).catch((e) => console.warn('flood', e));
@@ -324,7 +318,6 @@ renderer.setAnimationLoop((now) => {
   if (flood && now - riverT > 250) {
     riverT = now;
     if (flood.inView(camera, 2500) || Math.abs(bar.river.value - RIVER.typical) > 20) riverSeen = now;
-    bar.showRiver(now - riverSeen < 2000);
   }
   barRect ??= bar.rect;
   labels?.update(camera, world, barRect, hud?.rects ?? []);

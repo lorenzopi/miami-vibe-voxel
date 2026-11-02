@@ -78,12 +78,12 @@ export class Bar {
     onRiver: (cm: number) => void;
   }) {
     this.el.id = 'bar';
-    this.search = new PlaceSearch(this.el, 'Search Warsaw…');
+    this.search = new PlaceSearch(this.el, 'Search Miami…');
     this.date = new Slider(this.el, { min: 1, max: 365, step: 1, marks: days, near: 3, log: false, show: dayMonth, onInput: onDay, onChange: onDayEnd });
     this.time = new Slider(this.el, { min: 4, max: 23.5, step: 1 / 60, marks: {}, near: 1 / 3, log: false, show: hhmm, onInput: onHour });
     this.sky = choices('sky', 'Weather', weathers, this.el);
     this.sky.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('button'); if (b) onWeather(b.dataset.v!); });
-    this.river = new Slider(this.el, { min: Math.min(...Object.values(river)), max: 1150, step: 1, marks: river, near: 20, log: true, shift: 460, show: (cm) => `Vistula ${cm} cm`, onInput: onRiver });
+    this.river = new Slider(this.el, { min: Math.min(...Object.values(river)), max: 1150, step: 1, marks: river, near: 20, log: true, shift: 460, show: (cm) => `${cm} cm`, onInput: onRiver });
     this.river.input.disabled = true;
   }
 
