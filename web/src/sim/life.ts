@@ -4,6 +4,7 @@ import type { World } from '../world';
 import { findCrossings } from './crossings';
 import { Aircraft } from './aircraft';
 import { drawDancers, DANCE } from './dance';
+import { Marine } from './marine';
 import { LifeMeshes, MAX_CARS, MAX_PEOPLE, MAX_TRAM_SECTIONS, setCount } from './meshes';
 import { at, cellKey, landingLane, prepPath, pt, Turn, turnOf, type Pt } from './path';
 import { Trains } from './trains';
@@ -51,6 +52,7 @@ export class StreetLife {
   readonly trams: Tram[] = [];
   readonly trains: Trains;
   readonly aircraft: Aircraft;
+  readonly marine: Marine;
   people: Person[] = [];
   private t = 0;
   private hour = 12;
@@ -100,7 +102,8 @@ export class StreetLife {
     this.M = new LifeMeshes(scene, this.heads, TRAM.sec);
     this.trains = new Trains(data.trains ?? []);
     this.aircraft = new Aircraft();
-    this.M.group.add(this.trains.group, this.aircraft.group);
+    this.marine = new Marine();
+    this.M.group.add(this.trains.group, this.aircraft.group, this.marine.group);
   }
 
   get group() { return this.M.group; }
@@ -120,6 +123,7 @@ export class StreetLife {
     while (this.acc >= STEP) { this.step(STEP, density); this.acc -= STEP; }
     this.trains.update(dt, hh);
     this.aircraft.update(dt, night);
+    this.marine.update(dt);
     this.render(dt, night, this.acc);
   }
 

@@ -34,6 +34,8 @@ export interface VoxelUniforms {
   uWinCol: U<THREE.Vector3[]>;
   uAlbedo: U<number>;
   uPkinLight: U<THREE.Color>;
+  uOrtho: U<THREE.Texture>;
+  uOrthoOn: U<number>;
 }
 export interface BuildUniforms { uStage: U<number>; uBldOn: U<THREE.Texture> }
 export interface ZoneUniforms {
@@ -70,7 +72,18 @@ export function makeUniforms(meta: Meta, engine: Engine): VoxelUniforms & Partia
     uWinCol: { value: Array.from({ length: 8 }, () => new THREE.Vector3(0.7, 0.25, 0.05)) },
     uAlbedo: { value: 0.7 },
     uPkinLight: { value: new THREE.Color(0.95, 0.74, 0.4) },
+    uOrtho: { value: tiny(THREE.RGBAFormat, new Uint8Array([180, 180, 175, 255])) },
+    uOrthoOn: { value: 0 },
   };
+  new THREE.TextureLoader().load('data/ortho.jpg', (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.flipY = false;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    base.uOrtho.value = tex;
+    base.uOrthoOn.value = 1;
+  });
   if (engine === 'city') return { ...base, uStage: { value: 0 }, uBldOn: { value: tiny(THREE.RedFormat, new Uint8Array(1)) } };
   const ids = () => tiny(THREE.RedIntegerFormat, new Uint16Array(1), THREE.UnsignedShortType);
   return { ...base, uZBlk: { value: ids() }, uZBld: { value: ids() }, uZFBlk: { value: tiny(THREE.RedFormat, new Uint8Array(1)) },
@@ -177,7 +190,7 @@ const ZONES_PARS = `
   }`;
 
 const FRAG_PARS = `
-  uniform sampler2D uPalette; uniform sampler2D uLampMap;
+  uniform sampler2D uPalette; uniform sampler2D uLampMap; uniform sampler2D uOrtho; uniform float uOrthoOn;
   uniform vec2 uSize; uniform float uNight; uniform float uTime; uniform vec3 uHorizon;
   uniform float uDrop; uniform sampler2D uFlood; uniform float uWet; uniform float uSnow; uniform float uAlbedo; uniform vec3 uPkinLight;
   varying vec3 vVox; varying vec3 vN; varying float vAO; varying float vGz; flat varying int vPal; varying float vHide;
@@ -217,16 +230,29 @@ const SURFACE = `
   vec3 base = pow(pe.rgb, vec3(2.2));
   int m = int(pe.a * 255.0 + 0.5);
   vec3 cell = floor(vVox - vN * 0.5 + 1e-3);
+  vec2 orthoUV = clamp(vVox.xz / uSize, 0.0, 1.0);
+  vec3 ortho = texture2D(uOrtho, orthoUV).rgb;
   float gz = vGz;
   float lvl = cell.y - gz;
   float fy = max(0.0, vVox.y - gz);
   bool vert = abs(vN.y) < 0.5;
+  if (uOrthoOn > 0.5 && vert && (m == ${MAT.WALL} || m == ${MAT.GLASS} || m == ${MAT.RIBBON} || m == ${MAT.CLASSIC})) {
+    vec3 oRim = clamp(ortho * 1.22, vec3(0.10), vec3(0.92));
+    base = mix(base, oRim, m == ${MAT.GLASS} ? 0.34 : 0.42);
+  }
   float u = abs(vN.x) > 0.5 ? cell.z : cell.x;
   float fu = abs(vN.x) > 0.5 ? vVox.z : vVox.x;
   float wpos = abs(vN.x) > 0.5 ? cell.x : cell.z;
   float h = hash13(cell);
   gEmissive = vec3(0.); gRough = 0.88; gMetal = 0.0;
   vec3 col = base * (0.97 + 0.06 * h);
+  if (uOrthoOn > 0.5 && vN.y > 0.5 && m != ${MAT.WATER} && m != ${MAT.LEAF} && m != ${MAT.CAR} && m != ${MAT.LAMP} && m != ${MAT.SIGN} && m != ${MAT.MARK}) {
+    float wO = m == ${MAT.ROOF} || lvl > 0.5 ? 0.78 : (m == ${MAT.GRASS} || m == ${MAT.SOIL} ? 0.65 : 0.48);
+    col = mix(col, ortho * (0.98 + 0.04 * h), wO);
+    if (lvl > 0.5 && ortho.b > ortho.r * 1.55 && ortho.g > ortho.r * 1.28) {
+      gRough = 0.06; gMetal = 0.28;
+    }
+  }
   bool shopLvl = lvl > 0.5 && lvl < 3.5;
   if (m == ${MAT.WALL} || m == ${MAT.CONCRETE}) {
     if (vert) {

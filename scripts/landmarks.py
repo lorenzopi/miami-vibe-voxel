@@ -693,6 +693,8 @@ def make_views(found, osm, g, top_at, note, bmask, vol=None, leaf_ids=()):
         from aoi import I0, J0
         return {
             "overview": dict(label="Brickell & Biscayne Bay", target=[I0, 45, J0 - 150], pos=[I0 + 750, 520, J0 + 550]),
+            "portmiami": dict(label="PortMiami & Cruise Ships", target=[2950, 28, 430], pos=[2380, 280, 980]),
+            "miamarina": dict(label="Miamarina & Bayside Docks", target=[1745, 16, 410], pos=[2020, 145, 580]),
             "downtown": dict(label="Downtown & Metromover", target=[I0 - 80, 25, J0 - 780], pos=[I0 + 320, 210, J0 - 420]),
             "panorama": dict(label="Panorama Tower", target=[I0, 95, J0], pos=[I0 + 450, 190, J0 + 220]),
         }
