@@ -20,7 +20,7 @@ const MOUSE: Record<Mode, [string, string, string][]> = {
   walk: [['l', mouse('l', true), 'look'], ['', mouse('l'), 'walk'], ['', PERSON, 'follow'], ['Escape', ESC, 'fly up']],
   ride: [['l', mouse('l', true), 'look'], ['Escape', ESC, 'fly up']],
 };
-const WHO: Record<string, string> = { person: 'Following a pedestrian', car: 'Following a car', bus: 'Following a bus', tram: 'Following a tram' };
+const WHO: Record<string, string> = { person: 'Following a pedestrian', car: 'Following a car', bus: 'Following a bus', tram: 'Following Metromover' };
 
 // the key legend, bottom left: keys and mouse gestures as outlines, lit while in use
 export class Hud {

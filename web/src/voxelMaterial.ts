@@ -219,8 +219,10 @@ const SURFACE = `
   vec3 cell = floor(vVox - vN * 0.5 + 1e-3);
   float gz = vGz;
   float lvl = cell.y - gz;
+  float fy = max(0.0, vVox.y - gz);
   bool vert = abs(vN.y) < 0.5;
   float u = abs(vN.x) > 0.5 ? cell.z : cell.x;
+  float fu = abs(vN.x) > 0.5 ? vVox.z : vVox.x;
   float wpos = abs(vN.x) > 0.5 ? cell.x : cell.z;
   float h = hash13(cell);
   gEmissive = vec3(0.); gRough = 0.88; gMetal = 0.0;
@@ -228,41 +230,64 @@ const SURFACE = `
   bool shopLvl = lvl > 0.5 && lvl < 3.5;
   if (m == ${MAT.WALL} || m == ${MAT.CONCRETE}) {
     if (vert) {
-      float fl = mod(lvl, 3.0);
-      bool shop = lvl < 4.0 && lvl >= 1.0;
-      bool win = m == ${MAT.WALL} ? (fl > 0.5 && mod(u, 2.0) < 0.5) : false;
-      if (m == ${MAT.CONCRETE}) win = shop && mod(u, 4.0) > 0.5;
-      if (shop && m == ${MAT.WALL}) win = mod(u, 5.0) > 0.5 && lvl > 0.5;
+      float fl = fract(fy / 3.2);
+      float wx = fract(fu / 2.6);
+      bool shop = fy < 4.0 && fy >= 0.8;
+      bool win = m == ${MAT.WALL} ? (fl > 0.28 && fl < 0.86 && wx > 0.2 && wx < 0.8) : false;
+      if (m == ${MAT.CONCRETE}) win = shop && wx > 0.15;
+      if (shop && m == ${MAT.WALL}) win = fract(fu / 4.2) > 0.16 && fl > 0.18;
+      if (fl < 0.12 && m == ${MAT.WALL}) col = base * 0.9;
       if (win) {
-        col = mix(base * 0.42, vec3(0.10, 0.13, 0.17), 0.55) + 0.025 * h;
-        gRough = 0.12; gMetal = 0.6;
-        vec2 room = vec2(floor(u / 4.0) + wpos * 17.31 + vN.x * 3.1, floor(lvl / 3.0) + vN.z * 5.7);
+        col = mix(base * 0.34, vec3(0.08, 0.13, 0.18), 0.65) + 0.02 * h;
+        gRough = 0.10; gMetal = 0.62;
+        vec2 room = vec2(floor(fu / 2.6) + wpos * 17.31 + vN.x * 3.1, floor(fy / 3.2) + vN.z * 5.7);
         if (shop) {
-          if (hash12(vec2(floor(u / 6.0), wpos * 3.7)) < 0.8) gEmissive = vec3(1.0, 0.8, 0.55) * 1.5 * uNight;
+          if (hash12(vec2(floor(fu / 4.2), wpos * 3.7)) < 0.8) gEmissive = vec3(1.0, 0.8, 0.55) * 1.5 * uNight;
         } else {
-          gEmissive = windowLight(cell, room, floor(lvl / 3.0)) * uNight;
+          gEmissive = windowLight(cell, room, floor(fy / 3.2)) * uNight;
         }
       }
     }
   } else if (m == ${MAT.GLASS}) {
     if (vert) {
-      if (mod(lvl, 4.0) < 0.5) { col = base * 0.55 + 0.04; gRough = 0.5; }
-      else {
-        col = base * (0.8 + 0.12 * step(0.5, mod(u, 2.0)));
-        gRough = 0.08; gMetal = mix(0.35, 0.6, uNight);
-        vec2 zone = vec2(floor(u / 6.0) + wpos * 13.7 + vN.x * 2.3, floor(lvl / 4.0) + vN.z * 4.1);
-        if (shopLvl && lvl < 4.0) gEmissive = vec3(1.0, 0.86, 0.66) * 1.3 * uNight;
-        else gEmissive = windowLight(cell, zone, floor(lvl / 4.0)) * 1.2 * uNight;
+      float fl = fract(fy / 3.6);
+      float bay = fract(fu / 2.4);
+      float pane = hash12(vec2(floor(fu / 2.4) + wpos * 5.1, floor(fy / 3.6)));
+      if (fl < 0.16) {
+        col = base * 0.52 + vec3(0.03, 0.04, 0.05);
+        gRough = 0.32; gMetal = 0.45;
+      } else if (bay < 0.07) {
+        col = base * 0.68 + vec3(0.05);
+        gRough = 0.25; gMetal = 0.6;
+      } else {
+        col = base * (0.84 + 0.16 * pane);
+        gRough = 0.06; gMetal = mix(0.45, 0.68, uNight);
+        vec2 zone = vec2(floor(fu / 4.8) + wpos * 13.7 + vN.x * 2.3, floor(fy / 3.6) + vN.z * 4.1);
+        if (shopLvl && fy < 4.0) gEmissive = vec3(1.0, 0.86, 0.66) * 1.3 * uNight;
+        else gEmissive = windowLight(cell, zone, floor(fy / 3.6)) * 1.2 * uNight;
       }
     } else { gRough = 0.3; gMetal = 0.4; }
   } else if (m == ${MAT.CLASSIC}) {
     gRough = 0.8;
     if (vert && lvl < 7.5) col *= mod(lvl, 2.0) < 1.0 ? 0.9 : 1.0;
   } else if (m == ${MAT.RIBBON}) {
-    if (vert && mod(lvl, 4.0) > 1.5) {
-      col = mix(base * 0.4, vec3(0.12, 0.16, 0.2), 0.6) + 0.02 * h; gRough = 0.08; gMetal = 0.55;
-      vec2 zone = vec2(floor(u / 12.0) + wpos * 13.7 + vN.x * 2.3, floor(lvl / 4.0) + vN.z * 4.1);
-      gEmissive = windowLight(cell, zone, floor(lvl / 4.0)) * uNight;
+    if (vert) {
+      float fl = fract(fy / 3.4);
+      float bay = fract(fu / 2.8);
+      if (fl < 0.22) {
+        // White concrete balcony slab
+        col = base * 1.04; gRough = 0.42; gMetal = 0.1;
+      } else if (fl < 0.46) {
+        // Tinted glass balcony railing with slim vertical posts
+        col = bay < 0.06 ? base * 0.9 : mix(base * 0.72, vec3(0.32, 0.54, 0.64), 0.48);
+        gRough = 0.12; gMetal = 0.4;
+      } else {
+        // Recessed floor-to-ceiling sliding glass doors behind the balcony
+        col = mix(base * 0.25, vec3(0.06, 0.12, 0.17), 0.72) + 0.015 * h;
+        gRough = 0.07; gMetal = 0.62;
+        vec2 zone = vec2(floor(fu / 5.6) + wpos * 13.7 + vN.x * 2.3, floor(fy / 3.4) + vN.z * 4.1);
+        gEmissive = windowLight(cell, zone, floor(fy / 3.4)) * uNight;
+      }
     } else { gRough = 0.4; gMetal = 0.3; }
   } else if (m == ${MAT.PKIN}) {
     float tower = smoothstep(20.0, 28.0, lvl), wash = 1.0 - 0.3 * smoothstep(28.0, 190.0, lvl);
@@ -286,12 +311,19 @@ const SURFACE = `
   } else if (m == ${MAT.GRASS}) {
     col = base * mix(vec3(1.0), grassTint(), smoothstep(0.02, 0.08, base.g - max(base.r, base.b))) * (0.88 + 0.2 * h); gRough = 1.0;
   } else if (m == ${MAT.WATER}) {
-    float r = sin(cell.x * 0.9 + uTime * 1.3) * sin(cell.z * 1.1 - uTime) * 0.5 + 0.5;
-    col = mix(vec3(0.012, 0.085, 0.15), vec3(0.03, 0.2, 0.26), r * r) * (0.94 + 0.12 * h); gRough = 0.04; gMetal = 0.3;
+    float w1 = sin(vVox.x * 0.22 + vVox.z * 0.14 + uTime * 1.15) * 0.5 + 0.5;
+    float w2 = sin(vVox.x * 0.55 - vVox.z * 0.48 - uTime * 0.85) * 0.5 + 0.5;
+    float r = 0.55 * w1 + 0.45 * w2;
+    float shallow = clamp(1.0 - vAO, 0.0, 1.0);
+    vec3 deepCol = vec3(0.016, 0.135, 0.235);
+    vec3 midCol = vec3(0.032, 0.245, 0.315);
+    vec3 reefCol = vec3(0.065, 0.34, 0.38);
+    col = mix(mix(deepCol, midCol, r * r), reefCol, shallow * 0.55) * (0.98 + 0.04 * h);
+    gRough = 0.04; gMetal = 0.32;
     vec3 V = normalize(cameraPosition - vVox);
     float fres = 1.0 - clamp(dot(vN, V), 0.0, 1.0); fres *= fres; fres *= fres;
-    col = mix(col, uHorizon * 0.8, clamp(0.08 + 0.55 * fres, 0.0, 0.55));
-    if (vN.y > 0.5 && hash12(cell.xz * 0.37 + floor(uTime * 1.7 + h * 9.0)) < 0.006) col += vec3(0.35, 0.4, 0.38) * (1.0 - uNight) * (1.0 - uNight);
+    col = mix(col, uHorizon * 0.82, clamp(0.06 + 0.52 * fres, 0.0, 0.52));
+    if (vN.y > 0.5 && hash12(floor(vVox.xz * 0.5) * 0.37 + floor(uTime * 1.7 + h * 9.0)) < 0.005) col += vec3(0.32, 0.38, 0.38) * (1.0 - uNight) * (1.0 - uNight);
     if (uDrop > 0.0) { // low water: where the estimated bed is shallower than the drop, a sandbank
       float bed = texelFetch(uFlood, ivec2(cell.x, cell.z), 0).g * 25.5;
       if (bed < uDrop) {

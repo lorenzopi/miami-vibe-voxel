@@ -635,9 +635,35 @@ def assemble(curated, osm, top_at):
     if CITY == "miami":
         labels = list(curated)
         seen = set()
+        GENERIC = re.compile(
+            r"^(tower\s*[0-9ivx]+|building\s*[0-9a-z]+|garage\s*[0-9a-z]*|parking(\s+garage)?|"
+            r"north\s+tower|south\s+tower|east\s+tower|west\s+tower|phase\s*[0-9ivx]+)$",
+            re.I,
+        )
+        # Curated Miami skyline & waterfront anchors (grid col x, row y, far distance)
+        MIAMI_ANCHORS = [
+            ("Panorama Tower", "skyscraper · 252 m", 1200, 2100, 6000),
+            ("Four Seasons Hotel & Tower", "skyscraper · 240 m", 1110, 2592, 5500),
+            ("Southeast Financial Center", "skyscraper · 233 m", 1368, 1445, 5500),
+            ("Brickell Flatiron", "skyscraper · 224 m", 1072, 2096, 4500),
+            ("One Thousand Museum", "skyscraper · 216 m", 1228, 495, 4500),
+            ("Miami Tower", "skyscraper · 191 m", 1126, 1448, 4500),
+            ("Freedom Tower", "historic landmark", 1244, 800, 4500),
+            ("Kaseya Center", "arena", 1468, 560, 5000),
+            ("Pérez Art Museum Miami", "museum", 1620, 315, 4500),
+            ("Frost Museum of Science", "museum", 1545, 255, 4500),
+            ("Bayfront Park", "park", 1480, 1180, 4500),
+            ("Brickell Key", "island", 1740, 1960, 4500),
+            ("PortMiami", "cruise port", 2850, 920, 5000),
+        ]
+        for name, kind, cx, cy, far in MIAMI_ANCHORS:
+            if 0 <= cy < D and 0 <= cx < W:
+                seen.add(name.lower())
+                labels.append(dict(name=name, en="", kind=kind, x=cx, y=cy, z=max(top_at(cy, cx), 14), far=far))
         for _oid, _typ, tags, geom in osm.areas:
-            name = tags.get("name")
-            if not name or name in seen or "citadel hq" in name.lower():
+            name = (tags.get("name") or "").strip()
+            low = name.lower()
+            if not name or low in seen or "citadel hq" in low or GENERIC.match(name):
                 continue
             if tags.get("building") in ("construction", "proposed") or "construction" in tags or "proposed" in tags:
                 continue
@@ -645,7 +671,7 @@ def assemble(curated, osm, top_at):
             if kind not in ("museum", "attraction", "hotel", "viewpoint", "gallery", "university",
                             "theatre", "arts_centre", "stadium", "park", "marina") and "building" not in tags:
                 continue
-            if tags.get("building") in ("house", "garage", "shed", "roof", "kiosk") and not kind:
+            if tags.get("building") in ("house", "garage", "shed", "roof", "kiosk", "parking") and not kind:
                 continue
             if "building" in tags and not kind and not tags.get("height") and not tags.get("building:levels"):
                 continue
@@ -653,23 +679,35 @@ def assemble(curated, osm, top_at):
             r, c = int(point.y), int(point.x)
             if not (0 <= r < D and 0 <= c < W):
                 continue
-            if "building" in tags and not kind and top_at(r, c) <= 6:
-                continue  # skip unbuilt footprints whose lidar top is still at ground level
-            seen.add(name)
-            far = 2200 if kind in ("museum", "attraction", "stadium", "university") else 700
-            labels.append(dict(name=name, en=tags.get("name:en") or "", kind=kind or tags.get("building") or "place",
-                               x=c, y=r, z=top_at(r, c), far=far))
+            z_top = top_at(r, c)
+            if "building" in tags and not kind and z_top <= 16:
+                continue  # skip unbuilt footprints and minor low sheds
+            seen.add(low)
+            if kind in ("museum", "attraction", "stadium", "university", "park"):
+                far = 2600
+            elif z_top >= 170:
+                far = 3800
+            elif z_top >= 115:
+                far = 2200
+            elif z_top >= 75:
+                far = 1200
+            else:
+                far = 520
+            labels.append(dict(name=name, en=tags.get("name:en") or "", kind=kind or tags.get("building") or "building",
+                               x=c, y=r, z=z_top, far=far))
         for _oid, tags, pt in osm.nodes:
-            name = tags.get("name")
-            if not name or name in seen or tags.get("railway") != "station":
+            name = (tags.get("name") or "").strip()
+            low = name.lower()
+            if not name or low in seen or tags.get("railway") != "station":
                 continue
             r, c = int(pt.y), int(pt.x)
             if not (0 <= r < D and 0 <= c < W):
                 continue
-            seen.add(name)
+            seen.add(low)
             net = (tags.get("network") or tags.get("operator") or "").lower()
             kind = "Metromover station" if "mover" in net or tags.get("station") == "monorail" else "Metrorail station"
-            labels.append(dict(name=name, en="", kind=kind, x=c, y=r, z=top_at(r, c) + 8, far=1200))
+            labels.append(dict(name=name, en="", kind=kind, x=c, y=r, z=top_at(r, c) + 8, far=1100))
+        labels.sort(key=lambda l: (-l["far"], -l["z"]))
         return labels
     curated = list(curated)
     for facts, poly in landmarks.jazdow_houses(osm):

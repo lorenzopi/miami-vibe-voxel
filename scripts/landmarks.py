@@ -462,31 +462,42 @@ def roof_override(f, pal):
 
 
 def palm_tree(vol, g, r, c, h, leaves, trunk, height=None):
-    """Royal / coconut palm: slender 1-voxel trunk up to the crownshaft and 6–8 arching fronds."""
-    H = int(height or 11 + h % 5)
+    """Royal / coconut palm: slender trunk up to the crownshaft and 8 arching, 6-connected fronds."""
+    H = int(np.clip(height or (11 + h % 6), 7, 25))
     z0 = int(g[r, c])
-    top = min(z0 + H, vol.shape[0] - 2)
+    top = min(z0 + H - 1, vol.shape[0] - 3)
     if top <= z0 + 4:
         return
-    vol[z0:top - 1, r, c] = trunk
+    Hh, Dd, Ww = vol.shape
+    vol[z0:top + 1, r, c] = trunk
     leaf = leaves[(h >> 7) % 5]
     leaf2 = leaves[5 + (h >> 11) % 5]
-    angles = [k * math.pi / 4 + ((h >> (k * 3)) & 3) * 0.12 for k in range(8)]
-    span = min(4, max(3, H // 3))
-    for i, a in enumerate(angles):
+    # Crown center tuft (6-connected around top of trunk)
+    for dz, dr, dc in ((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)):
+        zz, rr, cc = top + dz, r + dr, c + dc
+        if 0 <= rr < Dd and 0 <= cc < Ww and 0 <= zz < Hh:
+            vol[zz, rr, cc] = leaf if dz == 0 else leaf2
+    span = min(5, max(3, int(round(H * 0.34))))
+    for i in range(8):
+        a = i * (math.pi / 4) + (((h >> (i * 3)) & 3) - 1.5) * 0.08
         ca, sa = math.cos(a), math.sin(a)
+        pz, pr, pc = top, r, c
         for s in range(1, span + 1):
             rr = r + int(round(sa * s))
             cc = c + int(round(ca * s))
-            dz = 1 if s == 1 else (0 if s == 2 else -(s - 2))
-            zz = top - 1 + dz
-            if 0 <= rr < vol.shape[1] and 0 <= cc < vol.shape[2] and 0 <= zz < vol.shape[0] and vol[zz, rr, cc] == 0:
-                vol[zz, rr, cc] = leaf if (i + s) % 2 == 0 else leaf2
-    for dr in (-1, 0, 1):
-        for dc in (-1, 0, 1):
-            if abs(dr) + abs(dc) <= 1 and 0 <= r + dr < vol.shape[1] and 0 <= c + dc < vol.shape[2]:
-                if vol[top, r + dr, c + dc] == 0:
-                    vol[top, r + dr, c + dc] = leaf
+            dz = 1 if s <= 2 else (0 if s == 3 else -(s - 3))
+            zz = top + dz
+            col = leaf if (i + s) % 2 == 0 else leaf2
+            # Step one axis at a time so every frond voxel is 6-face-connected to the trunk
+            while pr != rr or pc != cc or pz != zz:
+                if pr != rr:
+                    pr += 1 if rr > pr else -1
+                elif pc != cc:
+                    pc += 1 if cc > pc else -1
+                else:
+                    pz += 1 if zz > pz else -1
+                if 0 <= pr < Dd and 0 <= pc < Ww and 0 <= pz < Hh and vol[pz, pr, pc] == 0:
+                    vol[pz, pr, pc] = col
 
 
 def small_tree(vol, g, r, c, h, leaves, trunk, height=None):

@@ -240,6 +240,7 @@ function searchItems(meta: Meta, places: Place[] = []): SearchItem[] {
     ...places.filter(([name]) => !seen.has(name)).map(([name, kind, x, y, size, alt]) => ({
       name, alt: alt ?? '', kind, go: () => goPlace(x, y, size, { name, kind }, name),
     })),
+    { name: 'Follow Metromover / Metrorail', alt: 'metromover metrorail train tram ride follow', kind: 'action', go: () => followNearest('tram') },
     { name: 'Follow a car', alt: 'car bus ride follow', kind: 'action', go: () => followNearest('car') },
     { name: 'Follow someone', alt: 'person people walk follow', kind: 'action', go: () => followNearest('person') },
   ];

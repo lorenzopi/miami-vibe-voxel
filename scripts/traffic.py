@@ -15,7 +15,7 @@ import numpy as np
 from pyproj import Transformer
 from scipy.ndimage import maximum_filter1d
 
-from aoi import D, RAW, W, to_grid
+from aoi import CITY, D, RAW, W, to_grid
 
 DRIVE = {"motorway": 22, "trunk": 16, "primary": 14, "secondary": 13.9, "tertiary": 12.5, "unclassified": 11,
          "residential": 9, "motorway_link": 14, "trunk_link": 12, "primary_link": 11, "secondary_link": 11,
@@ -23,7 +23,7 @@ DRIVE = {"motorway": 22, "trunk": 16, "primary": 14, "secondary": 13.9, "tertiar
 CLASS = {"primary": 3, "trunk": 3, "secondary": 3, "tertiary": 2, "unclassified": 1, "residential": 1}
 WALK = {"footway", "pedestrian", "path", "steps", "living_street", "platform", "cycleway"}
 
-_T = Transformer.from_crs(4326, 2180, always_xy=True)
+_T = Transformer.from_crs(4326, 6346 if CITY == "miami" else 2180, always_xy=True)
 
 
 def _num(v, default=None):
@@ -84,8 +84,11 @@ def build(g, nd_mean, note, surf=None, water=None, vol=None, solid=None):
     deck height: the lowest LiDAR return around, not the cars or cable stays the 2025 flight caught on it).
     vol, solid: the finished volume and which palette ids bear weight; every path is then fitted to it (fit)."""
     data = json.load(open(f"{RAW}/osm.json"))
-    # nodes of any bridge way (road, path, tram, rail): drawn on the deck, so agents there move at deck height
-    bridge_nodes = {n for e in data["elements"] if e["type"] == "way" and e.get("tags", {}).get("bridge") not in (None, "no")
+    # nodes of any bridge way (road, path, tram, rail, monorail): drawn on the deck, so agents there move at deck height
+    bridge_nodes = {n for e in data["elements"] if e["type"] == "way"
+                    and (e.get("tags", {}).get("bridge") not in (None, "no")
+                         or e.get("tags", {}).get("railway") in ("monorail", "subway")
+                         or (_num(e.get("tags", {}).get("layer"), 0) or 0) >= 1)
                     for n in e.get("nodes", [])}
     nodes = {}  # id -> (x, y) grid
     ntags = {}
@@ -371,10 +374,12 @@ def build(g, nd_mean, note, surf=None, water=None, vol=None, solid=None):
         c_, r_ = min(max(int(hx), 0), W - 1), min(max(int(hy), 0), D - 1)
         heads.append([round(hx, 1), round(hy, 1), int(g[r_, c_]), round(math.atan2(dx, dy), 2), sg["ctrl"], sg["axis"]])
 
-    # ---------------- trams: real route relations (PTv2, one relation per direction), chained and clipped
+    # ---------------- trams / Metromover / Metrorail: route relations (PTv2, one relation per direction), chained and clipped
+    RAIL_KINDS = ("tram", "monorail", "subway", "light_rail", "rail") if CITY == "miami" else ("tram", "rail", "light_rail")
+    ROUTE_KINDS = ("tram", "monorail", "subway", "light_rail", "train") if CITY == "miami" else ("tram",)
     way_by_id = {e["id"]: e for e in data["elements"] if e["type"] == "way"}
-    for e in data["elements"]:  # tram ways are railway=*, not highway=*: register their nodes too
-        if e["type"] == "way" and e.get("tags", {}).get("railway") == "tram":
+    for e in data["elements"]:  # tram/monorail ways are railway=*, not highway=*: register their nodes too
+        if e["type"] == "way" and e.get("tags", {}).get("railway") in RAIL_KINDS:
             for nid, p_ in zip(e["nodes"], e.get("geometry") or []):
                 if p_ and nid not in nodes:
                     x, y = _T.transform(p_["lon"], p_["lat"])
@@ -383,14 +388,14 @@ def build(g, nd_mean, note, surf=None, water=None, vol=None, solid=None):
     trams = []
     for rel in data["elements"]:
         t = rel.get("tags", {})
-        if rel["type"] != "relation" or t.get("route") != "tram":
+        if rel["type"] != "relation" or t.get("route") not in ROUTE_KINDS:
             continue
         seq = []
         for m in rel.get("members", []):
             if m["type"] != "way" or m.get("role") not in ("", "forward", "backward"):
                 continue
             w = way_by_id.get(m["ref"])
-            if not w or w.get("tags", {}).get("railway") not in ("tram", "rail", "light_rail"):
+            if not w or w.get("tags", {}).get("railway") not in RAIL_KINDS:
                 continue
             ns = [n for n in w["nodes"] if n in nodes]
             if len(ns) < 2:

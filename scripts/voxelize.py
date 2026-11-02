@@ -118,8 +118,8 @@ C = {  # ground & misc palette (MagicaVoxel-like pastel)
     "dirt": pal("#a58a66"), "dirt2": pal("#8e7455"), "fresh": pal("#93865a", M_GRASS),
     "ballast": pal("#8a8178"), "rail": pal("#55575d", M_METAL), "trambed": pal("#a9a59c"),
     "platform": pal("#b7b1a6"), "water": pal("#2a90b0" if CITY == "miami" else "#68654f", M_WATER), "mark": pal("#f1efe8", M_MARK),
-    "bare": pal("#a8977c", M_SOIL),  # lawns before their grass arrives (tiles.py: grass is its own file)
-    "soil": pal("#7a5c45", M_SOIL), "trunk": pal("#6b4f3a"), "lamp": pal("#ffe2a8", M_LAMP),
+    "bare": pal("#78a254" if CITY == "miami" else "#a8977c", M_SOIL),  # lawns before their grass arrives (tiles.py: grass is its own file)
+    "soil": pal("#7a5c45", M_SOIL), "trunk": pal("#989082" if CITY == "miami" else "#6b4f3a"), "lamp": pal("#ffe2a8", M_LAMP),
     "pole": pal("#3a3e42", M_METAL), "steps": pal("#a8a296"), "hatch": pal("#d9c860", M_MARK),
     "fence": pal("#dfe3e6", M_METAL), "crane": pal("#e7b23c", M_METAL), "crane_d": pal("#3d4249", M_METAL),
     "shelter": pal("#a9c3cf", M_GLASS), "deck": pal("#a7a49d", M_CONCRETE), "parking": pal("#6a6d73"),
@@ -181,6 +181,10 @@ nd_max_b = wall_clean(dsm).reshape(D, 2, W, 2).max((1, 3)) - dtm  # building top
 cellcol = np.median(orto.reshape(D, 5, W, 5, 3), axis=(1, 3)).astype(np.float32)
 rgbsum = cellcol.sum(-1) + 1
 exg = (2 * cellcol[..., 1] - cellcol[..., 0] - cellcol[..., 2]) / rgbsum
+if CITY == "miami":
+    # In NAIP over Miami, turquoise bay water and swimming pools have G >= B >> R, which gives high exg.
+    # Real chlorophyll foliage has G > 1.18 * B and R > 0.72 * B.
+    exg = np.where((cellcol[..., 1] > cellcol[..., 2] * 1.18) & (cellcol[..., 0] > cellcol[..., 2] * 0.72), exg, -0.1)
 lum = cellcol @ np.array([0.299, 0.587, 0.114], np.float32)
 note(f"ground: BASE={BASE} m a.s.l., g range {g.min()}..{g.max()}")
 
@@ -736,6 +740,19 @@ bmask &= topi >= 2
 # colours/materials per feature
 SACRED = {"church", "cathedral", "chapel", "basilica", "synagogue", "mosque", "temple", "shrine"}
 M_CLASSIC = 20
+M_RIBBON = 21
+MIAMI_GLASS = ["#6ea2b8", "#5886a0", "#86b0c4", "#5c949c", "#6c8ea8", "#7cb0ba", "#60889e", "#8eb4c2"]
+MIAMI_RIBBON = ["#f0ede6", "#e4eaef", "#f3f0e8", "#dde6ed", "#eae6dc", "#d9e3ec", "#ece9e2"]
+MIAMI_STUCCO = ["#f2eee6", "#ebe3d5", "#e6dfd3", "#f0e4d4", "#ead8cb", "#dce4e8", "#e8e3da"]
+RESIDENTIAL_WORDS = (
+    "residences", "condo", "brickell key", "tequesta", "icon", "jade", "axis", "plaza on brickell",
+    "mark", "yacht club", "carbonell", "courts", "courvoisier", "solaris", "500 brickell", "infinity",
+    "sls", "rise", "reach", "1010", "nine", "bond", "lofts", "marquis", "marinablue", "ten museum",
+    "one thousand", "paramount", "aria", "melody", "canvas", "vizcayne", "met 1", "wind", "mint",
+    "mybrickell", "brickell house", "brickell flatiron", "echo brickell", "millecento", "club at brickell",
+    "vue", "skyline", "neo vertika", "latitude", "ivy", "atlantis", "palace", "imperial", "santa maria",
+    "bristol", "villa Regina", "bayview", "isola", "asia", "saint louis",
+)
 
 
 def wall_style(f):
@@ -745,6 +762,34 @@ def wall_style(f):
         (parse_colour(f["parent"]["tags"].get("building:colour")) if f.get("parent") else None)
     btype = tag(f, "building") or ""
     h = f["maxh"] or float(np.median(top[f["rr"], f["cc"]]))
+    if CITY == "miami":
+        nm = (tag(f, "name") or "").lower()
+        sh = stable_hash(f["id"])
+        if "freedom tower" in nm:
+            return pal(soften(hex_rgb("#e8d4b2"), 0.05), M_CLASSIC)
+        if "courthouse" in nm:
+            return pal(soften(hex_rgb("#dfd8c8"), 0.05), M_CLASSIC)
+        if btype in SACRED or tag(f, "amenity") == "place_of_worship":
+            return pal(soften(col or hex_rgb("#e6dfd2")), M_CLASSIC)
+        is_res_tower = h > 26 and (
+            btype in ("apartments", "residential", "condominium", "hotel")
+            or any(w in nm for w in RESIDENTIAL_WORDS)
+            or (btype == "yes" and sh % 5 in (0, 1, 2) and "financial" not in nm and "center" not in nm and "plaza" not in nm)
+        )
+        if is_res_tower:
+            c_ = col or hex_rgb(MIAMI_RIBBON[sh % len(MIAMI_RIBBON)])
+            return pal(soften(c_, 0.04), M_RIBBON)
+        if h > 28 or "glass" in mat_tag or btype in ("office", "commercial"):
+            c_ = col or hex_rgb(MIAMI_GLASS[sh % len(MIAMI_GLASS)])
+            return pal(soften(c_, 0.06), M_GLASS)
+        if col is None:
+            base_c = np.array(hex_rgb(MIAMI_STUCCO[sh % len(MIAMI_STUCCO)]), float)
+            cc = cellcol[f["rr"], f["cc"]]
+            if len(cc) >= 3:
+                oc = np.median(cc, axis=0)
+                base_c = base_c * 0.78 + oc * 0.22
+            col = tuple(np.clip(base_c, 0, 255))
+        return pal(soften(col, 0.08), M_WALL)
     inside_pkin = pkin is not None and pkin["geom"].contains(f["geom"].representative_point())
     if inside_pkin:
         # OSM tags the stone #C6AE7F, a khaki; in photos the weathered sandstone is a mid warm grey (median 118,112,104 overcast, 2026)
@@ -777,26 +822,22 @@ def roof_style(f):
     if pkin is not None and pkin["geom"].contains(f["geom"].representative_point()) and col == hex_rgb("#666666"):
         # OSM's dark grey: the ortho shows light stone-grey roofs (its own colours carry the tower's shadow)
         return pal(soften(hex_rgb("#bab3a5"), 0.05), M_ROOF, q=12)
-    if h < 40:
+    if h < 40 or CITY == "miami":
         cc = cellcol[f["rr"], f["cc"]]
         L = lum[f["rr"], f["cc"]]
         if len(L) >= 3:
             sel = cc[(L >= np.percentile(L, 25)) & (L <= np.percentile(L, 85))]
-            oc = tuple(np.median(sel, axis=0))
-            # an OSM roof colour far from what the ortho sees (a palace's #003300, near black, over a mid-green copper
-            # roof) gives way to the ortho
-            # (never towards darker: a roof in a tower's shadow reads dark in the ortho)
+            oc = tuple(np.median(sel if len(sel) else cc, axis=0))
             lum_ = lambda c_: 0.299 * c_[0] + 0.587 * c_[1] + 0.114 * c_[2]
-            # (only dark OSM colours, the near-black tags; a red or green roof tag is usually right)
             if col is None or (np.linalg.norm(np.subtract(col, oc)) > 110 and lum_(col) < 90 and lum_(oc) > lum_(col) - 15):
                 if col is not None:
                     ROOF_OVERRULED.append((f["id"], tag(f, "roof:colour")))
                 col = oc
     if col is None:
-        col = hex_rgb("#7d7f84")
-    col = np.array(col, float) * 1.05  # ortho is slightly dark
-    col = tuple(np.clip(col.mean() + (col - col.mean()) * 0.6, 0, 255))  # and carries blue sky reflections
-    return pal(soften(col, 0.1), M_ROOF, q=12)
+        col = hex_rgb("#d8d5ce" if CITY == "miami" else "#7d7f84")
+    col = np.array(col, float) * (1.08 if CITY == "miami" else 1.05)
+    col = tuple(np.clip(col.mean() + (col - col.mean()) * (0.78 if CITY == "miami" else 0.6), 0, 255))
+    return pal(soften(col, 0.08 if CITY == "miami" else 0.1), M_ROOF, q=12)
 
 
 for f in render:
@@ -959,6 +1000,22 @@ roofcol = np.where(_ledge & ~green_roof, basewall, roofcol)
 note("facade steps topped with wall colour:", int(_ledge.sum()))
 rr, cc = np.nonzero(bmask)
 vol[zt[rr, cc] - 1, rr, cc] = np.where(green_roof[rr, cc], C["garden"], roofcol[rr, cc])
+if CITY == "miami":
+    # Rooftop & podium swimming pools from NAIP aerial photo (bright turquoise on flat podiums/roofs < 60 m)
+    roof_pool = (
+        bmask & (topi < 60) & ~_ledge
+        & (cellcol[..., 2] > cellcol[..., 0] * 1.75)
+        & (cellcol[..., 1] > cellcol[..., 0] * 1.48)
+        & (cellcol[..., 2] > 130) & (cellcol[..., 0] < 100)
+    )
+    _pl, _pn = ndimage.label(roof_pool)
+    if _pn:
+        _psz = ndimage.sum(roof_pool, _pl, range(1, _pn + 1))
+        roof_pool &= np.r_[False, (_psz >= 8) & (_psz <= 350)][_pl]
+    pr_, pc_ = np.nonzero(roof_pool)
+    if len(pr_):
+        vol[zt[pr_, pc_] - 1, pr_, pc_] = C["water"]
+    note("rooftop & podium pool cells:", len(pr_))
 note("green roof cells:", int(green_roof.sum()))
 # rooftop plant rooms, lift housings and stair heads (1.5-5 m over a building's main roof, under 80 cells) are roof
 # material, not facade: they wore the facade's office windows and read as little houses on every roof (Metropolitan)
@@ -1162,12 +1219,19 @@ if trunks:
     ok_ = k_ >= 0
     dep = 0.62 * Ht[k_] * np.sqrt(np.clip(1 - (_dt[vr_, vc_] / Rt[k_]) ** 2, 0, 1))
     if CITY == "miami":
-        # Compact tall crowns in Miami lidar (H >= 8 m, radius <= 4.5 m) are palms: shallow 2–3 m frond tuft at the top
-        # so the trunk stays exposed underneath instead of filling in a heavy deciduous ball.
-        palm_k = np.array(trunk_palm, bool) | ((Ht >= 8) & (Rt <= 4.6))
+        # Compact tall crowns in Miami lidar (6 <= H <= 25 m, radius <= 4.6 m) are palms: replace their boxy 2D
+        # extrusion with 3D 8-frond royal/coconut palms at the exact lidar peak positions and heights.
+        palm_k = np.array(trunk_palm, bool) | ((Ht >= 6) & (Ht <= 25) & (Rt <= 4.6))
         is_p = np.zeros(len(vr_), bool)
         is_p[ok_] = palm_k[k_[ok_]]
-        dep = np.where(is_p, np.minimum(dep, 2.5), dep)
+        veg[vr_[is_p], vc_[is_p]] = False
+        n_lidar_palms = 0
+        for idx_p, (r_, c_, _) in enumerate(trunks):
+            if palm_k[idx_p] and not bmask[r_, c_] and gcol[r_, c_] != C["water"]:
+                landmarks.palm_tree(vol, g, r_, c_, stable_hash(r_, c_), LEAVES, C["trunk"], height=int(round(Ht[idx_p])))
+                n_lidar_palms += 1
+        trunks = [tr for idx_p, tr in enumerate(trunks) if not palm_k[idx_p]]
+        note("3D lidar palm trees drawn:", n_lidar_palms, "broad canopy trees kept:", len(trunks))
     bot = np.round(crown_top[vr_, vc_] - np.maximum(dep, 1)).astype(np.int32)
     bot = np.clip(bot, 2, crown_top[vr_, vc_] - 1)
     crown_bot[vr_[ok_], vc_[ok_]] = bot[ok_]
@@ -1666,6 +1730,38 @@ for i, sl in enumerate(objs, 1):
             vol[g[r2 + sl[0].start, c2 + sl[1].start] + 1, r2 + sl[0].start, c2 + sl[1].start] = pal((60, 72, 86), M_GLASS)
         n_cars += 1
 note("vehicles from LiDAR:", n_cars, "cars,", n_bus, "buses/trams/trucks")
+
+if CITY == "miami":
+    # Docked yachts & boats in marinas / Miami River / Bayside from the 2021 lidar scan
+    near_deck = ndimage.binary_dilation(deck | bmask, iterations=4)
+    boat_mask = (gcol == C["water"]) & ~near_deck & (dsm_max > 1.8) & (dsm_max < 11.0)
+    blab, bn = ndimage.label(boat_mask)
+    bobjs = ndimage.find_objects(blab)
+    hull_col = pal("#f2efe9", M_CAR)
+    deck_teak = pal("#c8b698", M_CAR)
+    cabin_glass = pal((56, 74, 92), M_GLASS)
+    n_boats = 0
+    for i_b, sl in enumerate(bobjs, 1):
+        if sl is None:
+            continue
+        m_b = blab[sl] == i_b
+        area_b = int(m_b.sum())
+        if area_b < 16 or area_b > 520:
+            continue
+        rr, cc = np.nonzero(m_b)
+        rr, cc = rr + sl[0].start, cc + sl[1].start
+        z0 = g[rr, cc]
+        hm = float(np.median(dsm_max[rr, cc]))
+        vol[z0, rr, cc] = hull_col
+        er = ndimage.binary_erosion(m_b)
+        if er.any():
+            r2, c2 = np.nonzero(er)
+            r2, c2 = r2 + sl[0].start, c2 + sl[1].start
+            vol[z0[0] + 1, r2, c2] = cabin_glass if hm >= 2.8 else deck_teak
+            if hm >= 4.2:
+                vol[z0[0] + 2, r2, c2] = hull_col
+        n_boats += 1
+    note("boats & yachts on water from LiDAR:", n_boats)
 
 # ---------------------------------------------------------------- curated landmark details
 landmarks.apply_zones(vol, g, feats, pal, bmask, note)
